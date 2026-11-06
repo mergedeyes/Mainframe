@@ -192,8 +192,11 @@ fn draw_browser(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     let entry = app.browser.selected();
-    let title = entry.map_or(String::new(), |e| format!(" {} ", e.name));
-    let block = pane(Line::from(title).fg(DIM), false);
+    let mut title = vec![Span::styled(entry.map_or(String::new(), |e| format!(" {} ", e.name)), Style::new().fg(DIM))];
+    if matches!(app.preview, Some(Preview::Diff(_))) {
+        title.push(Span::styled("diff · V for contents ", Style::new().fg(Color::Yellow)));
+    }
+    let block = pane(Line::from(title), false);
     let height = area.height.saturating_sub(2) as usize;
 
     let lines: Vec<Line> = match &app.preview {
@@ -211,6 +214,20 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
                 })
                 .collect()
         }
+        Some(Preview::Diff(text)) => text
+            .iter()
+            .take(height)
+            .map(|l| {
+                let style = match l.as_bytes().first() {
+                    Some(b'+') => Style::new().fg(Color::Green),
+                    Some(b'-') => Style::new().fg(Color::Red),
+                    Some(b'@') => Style::new().fg(Color::Cyan),
+                    Some(b' ') => Style::new(),
+                    _ => Style::new().fg(DIM),
+                };
+                Line::from(Span::styled(l.clone(), style))
+            })
+            .collect(),
         Some(Preview::Dir(items)) if items.is_empty() => vec![Line::from("(empty)".fg(DIM))],
         Some(Preview::Dir(items)) => items
             .iter()
@@ -479,6 +496,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
         "view",
         &[
             ("v", "toggle preview"),
+            ("V", "diff / contents for changed files"),
             ("w", "toggle output pane"),
             ("z", "zoom output"),
             ("[ / ]", "previous / next output tab"),

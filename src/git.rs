@@ -27,6 +27,11 @@ impl GitInfo {
         !self.files.is_empty()
     }
 
+    /// Tracked and changed, so `git diff` has something to show.
+    pub fn modified(&self, path: &Path) -> bool {
+        self.files.get(path).is_some_and(|xy| xy != b"??")
+    }
+
     /// Marker shown next to an entry in the file list.
     pub fn mark(&self, path: &Path, is_dir: bool) -> Option<(&'static str, Color)> {
         if let Some(&[x, y]) = self.files.get(path) {
@@ -54,6 +59,22 @@ fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
         .output()
         .ok()?;
     out.status.success().then_some(out.stdout)
+}
+
+/// Staged and unstaged changes to one file, without the `diff --git` header.
+pub fn diff(path: &Path) -> Option<Vec<String>> {
+    let dir = path.parent()?;
+    let p = path.to_str()?;
+    // A repo without commits has no HEAD to diff against.
+    let raw = git(dir, &["diff", "--no-color", "--no-ext-diff", "HEAD", "--", p])
+        .or_else(|| git(dir, &["diff", "--no-color", "--no-ext-diff", "--cached", "--", p]))?;
+    let text = String::from_utf8_lossy(&raw);
+    let lines: Vec<String> = text
+        .lines()
+        .skip_while(|l| !l.starts_with("@@") && !l.starts_with("Binary"))
+        .map(|l| l.replace('\t', "    "))
+        .collect();
+    (!lines.is_empty()).then_some(lines)
 }
 
 pub fn status(cwd: &Path) -> Option<GitInfo> {

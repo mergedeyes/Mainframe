@@ -123,6 +123,8 @@ pub struct App {
     pub zoom_output: bool,
     pub output_pct: u16,
     pub show_preview: bool,
+    /// Modified files preview as their `git diff` (V toggles).
+    pub diff_preview: bool,
     pub focus: Focus,
     pub mode: Mode,
     pub status: Option<(String, Level, Instant)>,
@@ -160,6 +162,7 @@ impl App {
         let mut app = Self {
             browser: Browser::new(start, config.show_hidden),
             show_preview: config.preview,
+            diff_preview: true,
             config,
             tabs: vec![Tab::default()],
             tab: 0,
@@ -240,11 +243,8 @@ impl App {
             self.request_git();
         }
         self.sel_key = Some(sel);
+        self.update_preview();
         let entry = self.browser.selected().cloned();
-        self.preview = match (&entry, self.show_preview) {
-            (Some(e), true) => Some(browser::preview(e, self.browser.show_hidden)),
-            _ => None,
-        };
         self.run_hint = project::plan(Op::Run, entry.as_ref(), &self.browser.cwd, &self.config)
             .ok()
             .map(|p| p.cmd);
@@ -288,8 +288,22 @@ impl App {
             if generation == self.git_gen {
                 self.git = info;
                 self.git_pending = false;
+                // Whether the selection previews as a diff depends on the new status.
+                self.update_preview();
             }
         }
+    }
+
+    fn update_preview(&mut self) {
+        let entry = self.browser.selected();
+        self.preview = match entry {
+            Some(e) if self.show_preview => {
+                let modified = !e.is_dir && self.git.as_ref().is_some_and(|g| g.modified(&e.path));
+                let diff = (self.diff_preview && modified).then(|| git::diff(&e.path)).flatten();
+                Some(diff.map_or_else(|| browser::preview(e, self.browser.show_hidden), Preview::Diff))
+            }
+            _ => None,
+        };
     }
 
     /// For decisions that can't wait for the background `git status`.
@@ -431,6 +445,13 @@ impl App {
             KeyCode::Char('v') => {
                 self.show_preview = !self.show_preview;
                 self.invalidate();
+            }
+            KeyCode::Char('V') => {
+                self.diff_preview = !self.diff_preview;
+                self.show_preview = true;
+                self.update_preview();
+                let msg = if self.diff_preview { "modified files preview as diff" } else { "preview shows file contents" };
+                self.set_status(msg, Level::Info);
             }
             KeyCode::Char('w') => {
                 self.show_output = !self.show_output;

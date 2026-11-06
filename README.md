@@ -34,6 +34,7 @@ Press `?` inside for all keys.
 | `a A m d` | new file, new dir, rename/move, trash |
 | `y p P` | yank, paste copy, paste move |
 | `v w z Tab + -` | preview, output pane, zoom output, focus output, resize |
+| `V` | modified files preview as their `git diff` (default) or their contents |
 | `,` | edit config (custom key-bound commands live there) |
 
 In `:`, ↑↓ walk the command history (kept in `~/.local/state/mainframe/history`), narrowed to

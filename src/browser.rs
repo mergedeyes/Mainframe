@@ -160,6 +160,8 @@ impl Browser {
 
 pub enum Preview {
     Text(Vec<String>),
+    /// `git diff` of a modified file.
+    Diff(Vec<String>),
     Binary(u64),
     Dir(Vec<(String, bool)>),
     Error(String),
