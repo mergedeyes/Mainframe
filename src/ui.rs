@@ -254,6 +254,9 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
             };
             let style = if i == app.tab { Style::new().bold().reversed() } else { Style::new().fg(DIM) };
             title.extend([Span::raw(" "), state, Span::styled(format!(" {} {} ", i + 1, truncate(&t.label, 20)), style)]);
+            if t.watch.is_some() {
+                title.push(Span::styled("⟳", Style::new().fg(Color::Magenta)));
+            }
         }
         title.push(Span::raw(" "));
     }
@@ -267,6 +270,9 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
         title.push(Span::styled(format!("{} {} ", if l.ok { "✔" } else { "✘" }, l.detail), Style::new().fg(col)));
     }
 
+    if tab.watch.is_some() {
+        title.push(Span::styled("⟳ watching ", Style::new().fg(Color::Magenta)));
+    }
     let out = &mut app.tabs[app.tab].output;
     if !out.locs.is_empty() {
         title.push(Span::styled(format!("{} file:line · n N jump ", out.locs.len()), Style::new().fg(Color::Yellow)));
@@ -454,6 +460,8 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             (":", "shell command"),
             ("!", "open shell here"),
             ("x  ^c", "kill task · x closes a done tab"),
+            ("@", "rerun the shown tab's command"),
+            ("W", "watch: rerun it on file changes"),
             (",", "edit config"),
         ],
     ),

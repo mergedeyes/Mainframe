@@ -102,6 +102,17 @@ impl Task {
     }
 }
 
+impl Drop for Task {
+    /// A task replaced while still running (rerun, watch mode) is killed and reaped,
+    /// so it doesn't linger as a zombie.
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            self.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Output {
     pub lines: Vec<Line<'static>>,

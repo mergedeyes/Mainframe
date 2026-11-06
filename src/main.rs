@@ -13,6 +13,7 @@ mod project;
 mod targets;
 mod task;
 mod ui;
+mod watch;
 
 use std::{
     env,

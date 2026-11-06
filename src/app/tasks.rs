@@ -9,8 +9,9 @@ use super::{App, Focus, Level};
 use crate::{
     config,
     git::GIT,
-    project::Plan,
+    project::{self, Plan},
     task::{Output, Task},
+    watch::Watcher,
 };
 
 /// Beyond this, a new task replaces the first idle tab.
@@ -28,11 +29,20 @@ pub struct Tab {
     pub output: Output,
     pub task: Option<Task>,
     pub last_run: Option<LastRun>,
+    /// What ran here, for rerunning it.
+    pub plan: Option<Plan>,
+    /// Watch mode: reruns `plan` whenever a file under the project changes.
+    pub watch: Option<Watcher>,
 }
 
 impl Tab {
     pub fn running(&self) -> bool {
         self.task.is_some()
+    }
+
+    /// Running or watching: either way, new tasks shouldn't take this tab over.
+    fn busy(&self) -> bool {
+        self.running() || self.watch.is_some()
     }
 }
 
@@ -88,14 +98,14 @@ impl App {
     /// Where a new task goes: the shown tab if it's idle, else an idle tab that ran
     /// the same thing, else a new tab (`tabs.len()`), else the first idle one.
     fn tab_for(&self, label: &str) -> Option<usize> {
-        if !self.tab().running() {
+        if !self.tab().busy() {
             return Some(self.tab);
         }
         self.tabs
             .iter()
             .position(|t| !t.running() && t.label == label)
             .or_else(|| (self.tabs.len() < MAX_TABS).then_some(self.tabs.len()))
-            .or_else(|| self.tabs.iter().position(|t| !t.running()))
+            .or_else(|| self.tabs.iter().position(|t| !t.busy()))
     }
 
     pub(super) fn start_task(&mut self, label: String, plan: Plan) {
@@ -103,6 +113,15 @@ impl App {
             self.set_status(format!("{MAX_TABS} tasks are running — x kills the shown one"), Level::Err);
             return;
         };
+        if self.run_in(i, label, plan) {
+            self.tab = i;
+            self.show_output = true;
+        }
+    }
+
+    /// Starts `plan` in tab `i` (a new one when `i == tabs.len()`). Whatever ran there
+    /// before is killed; a watcher stays.
+    fn run_in(&mut self, i: usize, label: String, plan: Plan) -> bool {
         let mut output = Output::new(&plan.cwd);
         output.push(Line::from(vec![
             Span::styled("$ ", Style::new().fg(Color::DarkGray)),
@@ -111,16 +130,61 @@ impl App {
         ]));
         match Task::spawn(label.clone(), &plan.cmd, &plan.cwd) {
             Ok(task) => {
-                let tab = Tab { label, output, task: Some(task), last_run: None };
+                let watch = self.tabs.get_mut(i).and_then(|t| t.watch.take());
+                let tab = Tab { label, output, task: Some(task), last_run: None, plan: Some(plan), watch };
                 if i == self.tabs.len() {
                     self.tabs.push(tab);
                 } else {
                     self.tabs[i] = tab;
                 }
-                self.tab = i;
-                self.show_output = true;
+                true
             }
-            Err(e) => self.set_status(format!("failed to start: {e}"), Level::Err),
+            Err(e) => {
+                self.set_status(format!("failed to start: {e}"), Level::Err);
+                false
+            }
+        }
+    }
+
+    /// Runs the shown tab's command again, restarting it if it's still going.
+    pub(super) fn rerun(&mut self) {
+        let tab = self.tab();
+        let Some(plan) = tab.plan.clone() else {
+            return self.set_status("nothing ran here yet", Level::Info);
+        };
+        let label = tab.label.clone();
+        if self.run_in(self.tab, label, plan) {
+            self.show_output = true;
+        }
+    }
+
+    /// Turns watch mode on or off for the shown tab.
+    pub(super) fn toggle_watch(&mut self) {
+        let tab = &mut self.tabs[self.tab];
+        if tab.watch.take().is_some() {
+            let msg = format!("stopped watching for {}", tab.label);
+            return self.set_status(msg, Level::Info);
+        }
+        let Some(plan) = &tab.plan else {
+            return self.set_status("run something first — W then reruns it on every file change", Level::Info);
+        };
+        let root = project::detect(&plan.cwd).map_or_else(|| plan.cwd.clone(), |p| p.root);
+        let msg = format!("watching {} — {} reruns on every change · W stops", config::pretty_path(&root), tab.label);
+        tab.watch = Some(Watcher::new(root));
+        self.show_output = true;
+        self.set_status(msg, Level::Ok);
+    }
+
+    /// Reruns watched tasks whose files changed.
+    pub(super) fn poll_watchers(&mut self) {
+        for i in 0..self.tabs.len() {
+            let tab = &self.tabs[i];
+            if tab.watch.as_ref().is_some_and(Watcher::changed)
+                && let Some(plan) = tab.plan.clone()
+            {
+                let label = tab.label.clone();
+                self.run_in(i, label, plan);
+            }
         }
     }
 

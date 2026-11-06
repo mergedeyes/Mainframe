@@ -30,6 +30,7 @@ use crate::{
     git::{self, GIT, GitInfo},
     line::{Edit, LineEdit},
     project::{self, Op, Plan, Project, quote},
+    watch,
 };
 
 pub enum Mode {
@@ -132,6 +133,9 @@ pub struct App {
     git_pending: bool,
     git_tx: Sender<(u64, Option<GitInfo>)>,
     git_rx: Receiver<(u64, Option<GitInfo>)>,
+    /// Last look at the current directory, to notice changes made elsewhere.
+    dir_fp: (PathBuf, u64),
+    dir_checked: Instant,
 
     // Written by the UI so paging knows how tall things are.
     pub browser_height: u16,
@@ -168,6 +172,8 @@ impl App {
             git_pending: false,
             git_tx,
             git_rx,
+            dir_fp: (PathBuf::new(), 0),
+            dir_checked: Instant::now(),
             browser_height: 10,
             pending: None,
             quit: false,
@@ -190,7 +196,9 @@ impl App {
     /// Called every loop iteration: pumps task output and expires old messages.
     pub fn tick(&mut self) {
         self.poll_tasks();
+        self.poll_watchers();
         self.poll_git();
+        self.poll_dir();
         if let Some((_, _, at)) = &self.status
             && at.elapsed() > Duration::from_secs(6) {
                 self.status = None;
@@ -231,6 +239,25 @@ impl App {
         self.run_hint = project::plan(Op::Run, entry.as_ref(), &self.browser.cwd, &self.config)
             .ok()
             .map(|p| p.cmd);
+    }
+
+    /// Reloads the file list when something else changed this directory (or the git index).
+    fn poll_dir(&mut self) {
+        if self.dir_checked.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.dir_checked = Instant::now();
+        let extra: Vec<PathBuf> = self
+            .git
+            .iter()
+            .flat_map(|g| [g.root.join(".git/index"), g.root.join(".git/HEAD")])
+            .collect();
+        let fp = watch::dir_fingerprint(&self.browser.cwd, &extra);
+        let (cwd, old) = std::mem::replace(&mut self.dir_fp, (self.browser.cwd.clone(), fp));
+        if cwd == self.browser.cwd && old != fp {
+            self.browser.reload();
+            self.invalidate();
+        }
     }
 
     fn request_git(&mut self) {
@@ -361,6 +388,8 @@ impl App {
                 self.mode = Mode::GitMenu;
             }
             KeyCode::Char('x') => self.kill_task(),
+            KeyCode::Char('@') => self.rerun(),
+            KeyCode::Char('W') => self.toggle_watch(),
             KeyCode::Char('n') => self.step_loc(true),
             KeyCode::Char('N') => self.step_loc(false),
             KeyCode::Char('[') => self.switch_tab(-1),
