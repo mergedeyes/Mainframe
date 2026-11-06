@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{AfterReview, App, DesktopReview, Focus, InstallPicker, Level, Mode, TaskPicker},
+    app::{AfterReview, App, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode, TaskPicker},
     complete::Completer,
     form::{Form, FormKind},
     browser::{Preview, human_size},
@@ -60,6 +60,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::GitMenu => draw_git_menu(f, app.git.as_ref(), f.area()),
         Mode::Install(picker) => draw_install(f, picker, f.area()),
         Mode::Tasks(picker) => draw_task_picker(f, picker, f.area()),
+        Mode::Files(finder) => draw_file_finder(f, finder, f.area()),
         Mode::Form(form) => draw_form(f, form, f.area()),
         Mode::DesktopReview(review) => draw_desktop_review(f, review, f.area()),
         _ => {}
@@ -489,6 +490,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("Home End", "first / last"),
             ("PgUp PgDn ^u ^d", "page"),
             ("/", "filter"),
+            ("^P", "find any file in the project"),
             ("c", "go to path / zoxide"),
             ("Z", "zoxide picker (fzf)"),
             ("Tab ⇧Tab", "complete in any prompt"),
@@ -625,6 +627,43 @@ fn draw_git_menu(f: &mut Frame, info: Option<&git::GitInfo>, area: Rect) {
     let [l, r] = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(body);
     f.render_widget(Paragraph::new(left), l);
     f.render_widget(Paragraph::new(right), r);
+}
+
+fn draw_file_finder(f: &mut Frame, finder: &mut FileFinder, area: Rect) {
+    let rect = popup(area, 100, area.height.saturating_sub(4));
+    f.render_widget(Clear, rect);
+    let block = pane(Line::from(format!(" files in {} ", pretty_path(&finder.root)).bold()), true)
+        .title_bottom(Line::from(" type to filter · Enter show in list · ^E edit · Esc close ").right_aligned().fg(DIM));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+
+    let count = format!("{} ", finder.total);
+    f.render_widget(
+        Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(finder.filter.text.clone())]),
+        input,
+    );
+    f.render_widget(Line::from(count).right_aligned().fg(DIM), input);
+    f.set_cursor_position(Position::new((input.x + 3 + finder.filter.col() as u16).min(input.right().saturating_sub(1)), input.y));
+
+    let items: Vec<ListItem> = finder
+        .visible
+        .iter()
+        .map(|&i| {
+            let path = finder.file(i);
+            let (dir, name) = path.rsplit_once('/').map_or(("", path), |(d, n)| (d, n));
+            let mut spans = Vec::new();
+            if !dir.is_empty() {
+                spans.push(Span::styled(format!("{dir}/"), Style::new().fg(DIM)));
+            }
+            spans.push(Span::raw(name.to_string()));
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    let list = List::new(items)
+        .highlight_symbol("▌ ")
+        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(list, list_area, &mut finder.state);
 }
 
 fn draw_task_picker(f: &mut Frame, picker: &mut TaskPicker, area: Rect) {

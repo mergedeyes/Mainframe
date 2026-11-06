@@ -1,6 +1,7 @@
 //! App state and the key dispatch for the normal mode; each other mode lives in its own file.
 
 mod actions;
+mod file_finder;
 mod files;
 mod git_menu;
 mod installer;
@@ -18,6 +19,7 @@ use std::{
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+pub use file_finder::FileFinder;
 pub use installer::{AfterReview, DesktopReview, InstallPicker};
 pub use task_picker::TaskPicker;
 pub use tasks::Tab;
@@ -51,6 +53,7 @@ pub enum Mode {
     GitMenu,
     Install(InstallPicker),
     Tasks(TaskPicker),
+    Files(FileFinder),
     Form(Form),
     DesktopReview(DesktopReview),
 }
@@ -328,6 +331,7 @@ impl App {
             Mode::GitMenu => self.key_git(key),
             Mode::Install(_) => self.key_install(key),
             Mode::Tasks(_) => self.key_task_picker(key),
+            Mode::Files(_) => self.key_file_finder(key),
             Mode::Form(_) => self.key_form(key),
             Mode::DesktopReview(_) => self.key_desktop_review(key),
             Mode::Normal => self.key_normal(key),
@@ -358,6 +362,7 @@ impl App {
                 }
                 KeyCode::Char('d') => self.browser.move_by(self.browser_height as isize / 2),
                 KeyCode::Char('u') => self.browser.move_by(-(self.browser_height as isize / 2)),
+                KeyCode::Char('p') => self.open_file_finder(),
                 _ => {}
             }
             return;

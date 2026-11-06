@@ -19,6 +19,7 @@ Press `?` inside for all keys.
 | `j k` / arrows, `h l` | move, parent, enter |
 | `Enter` | enter dir / edit text file / run executable |
 | `/` · `c` · `Z` · `~` · `.` | filter · go to path or zoxide keywords · zoxide picker · home · toggle hidden |
+| `Ctrl-P` | fuzzy-find any file in the repo / project (`git ls-files`, so ignored files stay out); `Enter` shows it in the list, `^E` edits it |
 | `e` | edit in nano (configurable) |
 | `o` / `O` | open file / whole project in VS Code |
 | `r` / `R` | run in output pane / in the full terminal (for interactive programs) |

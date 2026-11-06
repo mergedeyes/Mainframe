@@ -16,7 +16,7 @@ use std::{
 };
 
 /// Build output, dependencies and caches: they change on every build and nobody edits them.
-const SKIP: &[&str] = &[
+pub const SKIP: &[&str] = &[
     "target", "node_modules", "build", "build-release", "dist", "out", "zig-out", "__pycache__", "venv",
 ];
 /// Stop descending after this many entries so a huge tree can't stall the thread.

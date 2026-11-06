@@ -5,6 +5,7 @@ mod complete;
 mod config;
 mod desktop;
 mod form;
+mod fuzzy;
 mod git;
 mod history;
 mod install;
