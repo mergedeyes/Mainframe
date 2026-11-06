@@ -20,7 +20,9 @@ impl App {
     pub(super) fn prompt(&mut self, kind: PromptKind, initial: &str) {
         let mut completer = match kind {
             PromptKind::Cd => Some(Completer::new(complete::Kind::Cd, self.zoxide)),
-            PromptKind::NewFile | PromptKind::Rename(_) => Some(Completer::new(complete::Kind::Path, false)),
+            PromptKind::NewFile | PromptKind::Rename(_) | PromptKind::SaveOutput => {
+                Some(Completer::new(complete::Kind::Path, false))
+            }
             PromptKind::NewDir => Some(Completer::new(complete::Kind::Dir, false)),
             PromptKind::Command => Some(Completer::new(complete::Kind::Shell, false)),
             PromptKind::SwitchBranch => Some(Completer::list(git::branches(&self.browser.cwd))),
@@ -96,6 +98,24 @@ impl App {
     pub(super) fn submit_prompt(&mut self, kind: PromptKind, input: String) {
         let cwd = self.browser.cwd.clone();
         match kind {
+            PromptKind::SaveOutput => {
+                let path = self.resolve(&input);
+                let out = &self.tabs[self.tab].output;
+                let res = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .and_then(|mut f| std::io::Write::write_all(&mut f, out.text().as_bytes()));
+                match res {
+                    Ok(()) => {
+                        let msg = format!("saved {} lines → {}", out.lines.len(), config::pretty_path(&path));
+                        self.set_status(msg, Level::Ok);
+                        self.browser.reload();
+                        self.invalidate();
+                    }
+                    Err(e) => self.set_status(format!("can't save {}: {e}", config::pretty_path(&path)), Level::Err),
+                }
+            }
             PromptKind::Command => {
                 self.history.add(&input);
                 self.start_task(input.clone(), Plan { cmd: input, cwd });

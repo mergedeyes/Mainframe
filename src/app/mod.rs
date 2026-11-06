@@ -37,6 +37,8 @@ use crate::{
 pub enum Mode {
     Normal,
     Filter(LineEdit),
+    /// `/` in the output pane.
+    Search(LineEdit),
     Prompt {
         kind: PromptKind,
         input: LineEdit,
@@ -63,6 +65,7 @@ pub enum PromptKind {
     Commit { all: bool },
     SwitchBranch,
     NewBranch,
+    SaveOutput,
 }
 
 impl PromptKind {
@@ -77,6 +80,7 @@ impl PromptKind {
             PromptKind::Commit { all: true } => "commit all, message",
             PromptKind::SwitchBranch => "switch to branch",
             PromptKind::NewBranch => "new branch",
+            PromptKind::SaveOutput => "save output to",
         }
     }
 }
@@ -318,6 +322,7 @@ impl App {
         match self.mode {
             Mode::Help => self.mode = Mode::Normal,
             Mode::Filter(_) => self.key_filter(key),
+            Mode::Search(_) => self.key_search(key),
             Mode::Prompt { .. } => self.key_prompt(key),
             Mode::Confirm { .. } => self.key_confirm(key),
             Mode::GitMenu => self.key_git(key),
@@ -483,10 +488,46 @@ impl App {
             KeyCode::End => out.scroll = 0,
             KeyCode::Enter => return self.open_loc(false),
             KeyCode::Char('o') => return self.open_loc(true),
+            KeyCode::Char('/') => self.mode = Mode::Search(LineEdit::new(out.search.clone())),
+            KeyCode::Char('S') => {
+                let name: String = self.tabs[self.tab]
+                    .label
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                    .collect();
+                let name = name.split('-').filter(|p| !p.is_empty()).take(4).collect::<Vec<_>>().join("-");
+                self.prompt(PromptKind::SaveOutput, &format!("{}.log", if name.is_empty() { "output" } else { &name }));
+            }
+            KeyCode::Esc if !out.search.is_empty() => out.clear_search(),
             KeyCode::Esc => self.focus = Focus::Browser,
             _ => return false,
         }
         true
+    }
+
+    fn key_search(&mut self, key: KeyEvent) {
+        let Mode::Search(edit) = &mut self.mode else { return };
+        let out = &mut self.tabs[self.tab].output;
+        match key.code {
+            KeyCode::Esc => {
+                out.clear_search();
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Enter => {
+                self.mode = Mode::Normal;
+                let msg = match out.matches.len() {
+                    0 if out.search.is_empty() => return,
+                    0 => format!("no match for {}", out.search),
+                    n => format!("{n} matches · n N step · Esc clears"),
+                };
+                self.set_status(msg, Level::Info);
+            }
+            _ => {
+                if edit.key(key) == Edit::Changed {
+                    out.set_search(&edit.text);
+                }
+            }
+        }
     }
 
     fn key_filter(&mut self, key: KeyEvent) {

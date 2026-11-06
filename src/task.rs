@@ -126,6 +126,16 @@ pub struct Output {
     pub locs: Vec<(usize, Loc)>,
     /// Index into `locs` of the one picked with n / N.
     pub cursor: Option<usize>,
+    /// Text searched for with `/` (lowercase); while set, n / N walk its matches.
+    pub search: String,
+    /// Line indices that contain `search`.
+    pub matches: Vec<usize>,
+    /// Index into `matches` of the current one.
+    pub match_cursor: Option<usize>,
+}
+
+fn plain(line: &Line) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
 impl Output {
@@ -134,9 +144,12 @@ impl Output {
     }
 
     pub fn push(&mut self, line: Line<'static>) {
-        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let text = plain(&line);
         if let Some(loc) = locate::find(&text, &self.cwd) {
             self.locs.push((self.lines.len(), loc));
+        }
+        if !self.search.is_empty() && text.to_lowercase().contains(&self.search) {
+            self.matches.push(self.lines.len());
         }
         self.lines.push(line);
         if self.scroll > 0 {
@@ -152,6 +165,12 @@ impl Output {
                 *i -= n;
             }
             self.cursor = self.cursor.and_then(|c| c.checked_sub(gone));
+            let gone = self.matches.iter().take_while(|&&i| i < n).count();
+            self.matches.drain(..gone);
+            for i in &mut self.matches {
+                *i -= n;
+            }
+            self.match_cursor = self.match_cursor.and_then(|c| c.checked_sub(gone));
         }
         self.scroll = self.scroll.min(self.max_scroll());
     }
@@ -175,10 +194,59 @@ impl Output {
             (Some(c), false) => (c + n - 1) % n,
         };
         self.cursor = Some(c);
-        let line = self.locs[c].0;
+        self.reveal(self.locs[c].0);
+        true
+    }
+
+    /// Sets the search and jumps to the newest match. False when nothing matches.
+    pub fn set_search(&mut self, query: &str) -> bool {
+        self.search = query.to_lowercase();
+        self.match_cursor = None;
+        self.matches = if self.search.is_empty() {
+            Vec::new()
+        } else {
+            (0..self.lines.len()).filter(|&i| plain(&self.lines[i]).to_lowercase().contains(&self.search)).collect()
+        };
+        self.step_match(false)
+    }
+
+    pub fn clear_search(&mut self) {
+        self.search.clear();
+        self.matches.clear();
+        self.match_cursor = None;
+    }
+
+    /// Line index of the current search match.
+    pub fn current_match(&self) -> Option<usize> {
+        self.matches.get(self.match_cursor?).copied()
+    }
+
+    /// Next (or previous) search match, wrapping around.
+    pub fn step_match(&mut self, forward: bool) -> bool {
+        let n = self.matches.len();
+        if n == 0 {
+            return false;
+        }
+        let c = match (self.match_cursor, forward) {
+            (None, true) => 0,
+            (None, false) => n - 1,
+            (Some(c), true) => (c + 1) % n,
+            (Some(c), false) => (c + n - 1) % n,
+        };
+        self.match_cursor = Some(c);
+        self.reveal(self.matches[c]);
+        true
+    }
+
+    /// Scrolls so `line` sits in the middle of the pane.
+    fn reveal(&mut self, line: usize) {
         let end = (line + self.height.div_ceil(2)).clamp(self.height.min(self.lines.len()), self.lines.len());
         self.scroll = self.lines.len() - end;
-        true
+    }
+
+    /// The whole output as plain text, for saving.
+    pub fn text(&self) -> String {
+        self.lines.iter().map(|l| plain(l) + "\n").collect()
     }
 
     /// Furthest scroll that still fills the pane: the first line at the top.

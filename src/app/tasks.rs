@@ -208,6 +208,18 @@ impl App {
     /// n / N: picks the next or previous `file:line` in the shown output.
     pub(super) fn step_loc(&mut self, forward: bool) {
         let out = &mut self.tabs[self.tab].output;
+        if !out.search.is_empty() {
+            if out.step_match(forward) {
+                let msg = format!("match {}/{}", out.match_cursor.unwrap_or(0) + 1, out.matches.len());
+                self.show_output = true;
+                self.focus = Focus::Output;
+                self.set_status(msg, Level::Info);
+            } else {
+                let msg = format!("no match for {}", out.search);
+                self.set_status(msg, Level::Info);
+            }
+            return;
+        }
         let total = out.locs.len();
         if !out.step_loc(forward) {
             self.set_status("no file:line locations in this output", Level::Info);

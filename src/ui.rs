@@ -298,7 +298,10 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
         title.push(Span::styled("⟳ watching ", Style::new().fg(Color::Magenta)));
     }
     let out = &mut app.tabs[app.tab].output;
-    if !out.locs.is_empty() {
+    if !out.search.is_empty() {
+        let at = out.match_cursor.map_or(0, |c| c + 1);
+        title.push(Span::styled(format!("/{} {at}/{} ", out.search, out.matches.len()), Style::new().fg(Color::Yellow)));
+    } else if !out.locs.is_empty() {
         title.push(Span::styled(format!("{} file:line · n N jump ", out.locs.len()), Style::new().fg(Color::Yellow)));
     }
     out.height = height;
@@ -314,7 +317,7 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
         let hint = if out.selected_loc().is_some() {
             " Enter edit · o VS Code · n N next/prev · Tab back "
         } else {
-            " ↑↓ PgUp PgDn scroll · [ ] tabs · z zoom · Tab back "
+            " ↑↓ scroll · / search · S save · [ ] tabs · z zoom · Tab back "
         };
         block = block.title_bottom(Line::from(hint).right_aligned().fg(DIM));
     }
@@ -322,10 +325,22 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     let end = out.lines.len().saturating_sub(out.scroll);
     let start = end.saturating_sub(height);
     let picked = out.selected_loc().map(|(i, _)| *i);
+    let current = out.current_match();
     let lines: Vec<Line> = (start..end)
-        .map(|i| match picked {
-            Some(p) if p == i => out.lines[i].clone().patch_style(Style::new().bg(Color::DarkGray)),
-            _ => out.lines[i].clone(),
+        .map(|i| {
+            let bg = if current == Some(i) {
+                Some(Color::Rgb(110, 85, 0))
+            } else if picked == Some(i) {
+                Some(Color::DarkGray)
+            } else if out.matches.binary_search(&i).is_ok() {
+                Some(Color::Rgb(50, 42, 10))
+            } else {
+                None
+            };
+            match bg {
+                Some(bg) => out.lines[i].clone().patch_style(Style::new().bg(bg)),
+                None => out.lines[i].clone(),
+            }
         })
         .collect();
     f.render_widget(Paragraph::new(lines).block(block), area);
@@ -353,6 +368,19 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         }
         Mode::Confirm { msg, .. } => {
             f.render_widget(Line::from(format!(" {msg} ")).style(Style::new().bg(Color::Yellow).fg(Color::Black).bold()), area);
+            return;
+        }
+        Mode::Search(edit) => {
+            f.render_widget(
+                Line::from(vec![
+                    Span::styled(" search output: ", Style::new().fg(ACCENT).bold()),
+                    Span::raw(edit.text.clone()),
+                    Span::styled("   Enter keep · Esc clear", Style::new().fg(DIM)),
+                ]),
+                area,
+            );
+            let x = area.x + 16 + edit.col() as u16;
+            f.set_cursor_position(Position::new(x.min(area.right().saturating_sub(1)), area.y));
             return;
         }
         Mode::Filter(edit) => {
@@ -510,6 +538,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("z", "zoom output"),
             ("[ / ]", "previous / next output tab"),
             ("n / N", "next / prev file:line in output"),
+            ("/  S", "(in output) search · save to file"),
             ("Tab", "focus output (scroll)"),
             ("+ / -", "resize output"),
             ("q", "quit"),
