@@ -17,6 +17,7 @@ use ratatui::{
 
 use crate::{
     browser::{self, Browser, Preview},
+    complete::{self, Completer},
     config::{self, Action, Config},
     form::{Form, FormEvent, FormKind},
     git::{self, GIT, GitInfo},
@@ -28,7 +29,7 @@ use crate::{
 pub enum Mode {
     Normal,
     Filter,
-    Prompt { kind: PromptKind, input: String },
+    Prompt { kind: PromptKind, input: String, completer: Option<Completer> },
     Confirm { msg: String, action: Confirmed },
     Help,
     GitMenu,
@@ -245,6 +246,7 @@ impl App {
                 self.spawn_detached(&format!("zoxide add -- {}", quote(&self.browser.cwd)));
             }
             self.info_cwd = self.browser.cwd.clone();
+            let _ = env::set_current_dir(&self.browser.cwd);
             self.project = project::detect(&self.browser.cwd);
             self.git = git::status(&self.browser.cwd);
         }
@@ -442,15 +444,38 @@ impl App {
     }
 
     fn prompt(&mut self, kind: PromptKind, initial: &str) {
-        self.mode = Mode::Prompt { kind, input: initial.to_string() };
+        let mut completer = match kind {
+            PromptKind::Cd => Some(Completer::new(complete::Kind::Cd, self.zoxide)),
+            PromptKind::NewFile | PromptKind::Rename(_) => Some(Completer::new(complete::Kind::Path, false)),
+            PromptKind::NewDir => Some(Completer::new(complete::Kind::Dir, false)),
+            PromptKind::Command => Some(Completer::new(complete::Kind::Shell, false)),
+            PromptKind::SwitchBranch => Some(Completer::list(git::branches(&self.browser.cwd))),
+            PromptKind::Commit { .. } | PromptKind::NewBranch => None,
+        };
+        // Prefilled inputs (rename) shouldn't pop a list until the user types.
+        if let Some(c) = completer.as_mut().filter(|_| initial.is_empty()) {
+            c.update(initial, false);
+        }
+        self.mode = Mode::Prompt { kind, input: initial.to_string(), completer };
     }
 
     fn key_prompt(&mut self, key: KeyEvent) {
-        let Mode::Prompt { kind, input } = &mut self.mode else { return };
+        let Mode::Prompt { kind, input, completer } = &mut self.mode else { return };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let has_items = completer.as_ref().is_some_and(|c| !c.items.is_empty());
+        let mut edited = true;
         match key.code {
-            KeyCode::Esc => self.mode = Mode::Normal,
-            KeyCode::Char('c') if ctrl => self.mode = Mode::Normal,
+            KeyCode::Esc => return self.mode = Mode::Normal,
+            KeyCode::Char('c') if ctrl => return self.mode = Mode::Normal,
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up
+                if completer.is_some() && (has_items || matches!(key.code, KeyCode::Tab | KeyCode::BackTab)) =>
+            {
+                let forward = matches!(key.code, KeyCode::Tab | KeyCode::Down);
+                if let Some(c) = completer.as_mut() {
+                    c.cycle(input, forward);
+                }
+                edited = false;
+            }
             KeyCode::Char('u') if ctrl => input.clear(),
             KeyCode::Char('w') if ctrl => {
                 let trimmed = input.trim_end().len();
@@ -467,9 +492,14 @@ impl App {
                 if !input.is_empty() {
                     self.submit_prompt(kind, input);
                 }
+                return;
             }
-            _ => {}
+            _ => edited = false,
         }
+        if edited
+            && let Some(c) = completer.as_mut() {
+                c.update(input, false);
+            }
     }
 
     fn key_confirm(&mut self, key: KeyEvent) {

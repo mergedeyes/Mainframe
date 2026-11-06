@@ -30,6 +30,10 @@ Press `?` inside for all keys.
 | `v w z Tab + -` | preview, output pane, zoom output, focus output, resize |
 | `,` | edit config (custom key-bound commands live there) |
 
+Every prompt completes with Tab (Shift-Tab / ↑↓ cycle): paths in go-to, new, rename and gh's
+source folder; programs from `$PATH` and paths in `:` commands; zoxide matches for keywords in
+`c`; branch names when switching.
+
 "Run" knows Cargo (incl. `src/bin/*.rs` and `examples/*.rs`), Go, npm, Make, and single files
 (`.rs .c .cpp .py .sh .js .go …`, or anything executable).
 

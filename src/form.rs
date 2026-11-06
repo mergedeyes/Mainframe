@@ -1,5 +1,7 @@
 //! Step-through forms: every field has a default that Enter accepts and typing replaces.
 
+use crate::complete::{self, Completer};
+
 pub struct Field {
     pub label: &'static str,
     pub default: String,
@@ -9,15 +11,21 @@ pub struct Field {
     pub options: Vec<&'static str>,
     pub choice: usize,
     pub hint: &'static str,
+    /// Directory field: Tab completes paths instead of moving to the next field.
+    pub dir: bool,
 }
 
 impl Field {
     pub fn text(label: &'static str, default: impl Into<String>, hint: &'static str) -> Self {
-        Self { label, default: default.into(), input: String::new(), options: Vec::new(), choice: 0, hint }
+        Self { label, default: default.into(), input: String::new(), options: Vec::new(), choice: 0, hint, dir: false }
+    }
+
+    pub fn dir(label: &'static str, default: impl Into<String>, hint: &'static str) -> Self {
+        Self { dir: true, ..Self::text(label, default, hint) }
     }
 
     pub fn choice(label: &'static str, options: &[&'static str], default: usize, hint: &'static str) -> Self {
-        Self { label, default: String::new(), input: String::new(), options: options.to_vec(), choice: default, hint }
+        Self { label, default: String::new(), input: String::new(), options: options.to_vec(), choice: default, hint, dir: false }
     }
 
     pub fn is_choice(&self) -> bool {
@@ -48,6 +56,8 @@ pub struct Form {
     pub step: usize,
     /// Shown under the fields (e.g. "not a git repo yet, will run git init first").
     pub note: Option<String>,
+    /// Suggestions for the active directory field.
+    pub completer: Option<Completer>,
 }
 
 pub enum FormEvent {
@@ -73,6 +83,48 @@ impl Form {
         if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
             return FormEvent::Cancel;
         }
+
+        // Directory fields: Tab completes, and suggestions follow typing.
+        if let Some(field) = self.fields.get_mut(self.step).filter(|f| f.dir) {
+            let completer = self.completer.get_or_insert_with(|| Completer::new(complete::Kind::Dir, false));
+            match key.code {
+                KeyCode::Tab | KeyCode::BackTab => {
+                    if field.input.is_empty() {
+                        // Start from the default so Tab refines it instead of starting over.
+                        field.input = field.default.clone();
+                        completer.update(&field.input, false);
+                    }
+                    completer.cycle(&mut field.input, key.code == KeyCode::Tab);
+                    return FormEvent::None;
+                }
+                KeyCode::Char('u') if ctrl => {
+                    field.input.clear();
+                    completer.update("", false);
+                    return FormEvent::None;
+                }
+                KeyCode::Backspace if !field.input.is_empty() => {
+                    field.input.pop();
+                    completer.update(&field.input, false);
+                    return FormEvent::None;
+                }
+                KeyCode::Char(c) if !ctrl => {
+                    field.input.push(c);
+                    completer.update(&field.input, false);
+                    return FormEvent::None;
+                }
+                _ => {}
+            }
+        }
+        let before = self.step;
+        let event = self.key_general(key, ctrl, last);
+        if self.step != before {
+            self.completer = None;
+        }
+        event
+    }
+
+    fn key_general(&mut self, key: ratatui::crossterm::event::KeyEvent, ctrl: bool, last: usize) -> FormEvent {
+        use ratatui::crossterm::event::KeyCode;
         match key.code {
             KeyCode::Up | KeyCode::BackTab => self.step = self.step.saturating_sub(1),
             KeyCode::Down | KeyCode::Tab => self.step = (self.step + 1).min(last),

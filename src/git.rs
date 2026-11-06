@@ -120,6 +120,30 @@ fn parse_branch(info: &mut GitInfo, head: &str) {
     }
 }
 
+/// Local branches, then remote ones not checked out locally (without the remote prefix).
+pub fn branches(cwd: &Path) -> Vec<String> {
+    let Some(raw) = git(cwd, &["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"]) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for r in String::from_utf8_lossy(&raw).lines() {
+        let name = if let Some(b) = r.strip_prefix("refs/heads/") {
+            b
+        } else if let Some(rest) = r.strip_prefix("refs/remotes/") {
+            match rest.split_once('/') {
+                Some((_, "HEAD")) | None => continue,
+                Some((_, b)) => b,
+            }
+        } else {
+            continue;
+        };
+        if !out.iter().any(|o| o == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
 /// `git` with colors forced on, since the output pane isn't a tty.
 pub const GIT: &str = "git -c color.ui=always";
 
@@ -233,12 +257,13 @@ pub fn gh_repo_form(source: &Path) -> Result<Form, String> {
             Field::text("name", name, "repository name"),
             Field::text("description", "", "optional"),
             Field::choice("visibility", &["private", "public", "internal"], 0, "←/→ to change"),
-            Field::text("source", source.to_string_lossy(), "local folder to link"),
+            Field::dir("source", source.to_string_lossy(), "local folder to link · Tab completes"),
             Field::text("remote", if has_origin { "github" } else { "origin" }, "remote name to add"),
             Field::choice("push", &["yes", "no"], if is_repo && !has_commits { 1 } else { 0 }, "push current branch"),
         ],
         step: 0,
         note,
+        completer: None,
     })
 }
 

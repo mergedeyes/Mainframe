@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::{
     app::{App, Focus, InstallPicker, Level, Mode},
+    complete::Completer,
     form::{Form, FormKind},
     browser::{Preview, human_size},
     config::pretty_path,
@@ -258,14 +259,18 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     match &app.mode {
-        Mode::Prompt { kind, input } => {
+        Mode::Prompt { kind, input, completer } => {
             let label = format!(" {}: ", kind.label());
-            let x = area.x + (label.chars().count() + input.chars().count()) as u16;
+            let label_w = label.chars().count() as u16;
+            let x = area.x + label_w + input.chars().count() as u16;
             f.render_widget(
                 Line::from(vec![Span::styled(label, Style::new().fg(ACCENT).bold()), Span::raw(input.clone())]),
                 area,
             );
             f.set_cursor_position(Position::new(x.min(area.right().saturating_sub(1)), area.y));
+            if let Some(c) = completer {
+                draw_completions(f, c, area.x + label_w.saturating_sub(1), area.y, true);
+            }
             return;
         }
         Mode::Confirm { msg, .. } => {
@@ -316,6 +321,51 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Line::from(spans), area);
 }
 
+/// Suggestion list anchored to an input line: above it (footer prompt) or below it (form field).
+fn draw_completions(f: &mut Frame, c: &Completer, x: u16, anchor_y: u16, above: bool) {
+    const ROWS: usize = 10;
+    let n = c.items.len();
+    if n == 0 {
+        return;
+    }
+    let screen = f.area();
+    let shown = n.min(ROWS);
+    // Scroll the window so the selected item stays visible.
+    let first = c.selected.map_or(0, |s| (s + 1).saturating_sub(ROWS)).min(n - shown);
+    let items = &c.items[first..first + shown];
+
+    let widest = items.iter().map(|i| i.display.chars().count()).max().unwrap_or(0);
+    let x = x.min(screen.right().saturating_sub(24));
+    let w = (widest as u16 + 4).clamp(24, screen.right().saturating_sub(x).max(24));
+    let h = shown as u16 + 2;
+    let y = if above { anchor_y.saturating_sub(h) } else { (anchor_y + 1).min(screen.bottom().saturating_sub(h)) };
+    let rect = Rect::new(x, y, w, h).intersection(screen);
+
+    let lines: Vec<Line> = items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let mut style = if item.is_dir { Style::new().fg(Color::Blue).bold() } else { Style::new() };
+            if c.selected == Some(first + i) {
+                style = style.bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::REVERSED);
+            }
+            Line::from(Span::styled(format!(" {} ", truncate(&item.display, w as usize - 4)), style))
+        })
+        .collect();
+
+    let count = match c.selected {
+        Some(s) => format!(" {}/{n} ", s + 1),
+        None if n > shown => format!(" {n} matches · Tab "),
+        None => " Tab ".into(),
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(DIM))
+        .title_bottom(Line::from(count).right_aligned());
+    f.render_widget(Clear, rect);
+    f.render_widget(Paragraph::new(lines).block(block), rect);
+}
+
 fn popup(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width.saturating_sub(2));
     let h = h.min(area.height.saturating_sub(2));
@@ -335,6 +385,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("/", "filter"),
             ("c", "go to path / zoxide"),
             ("Z", "zoxide picker (fzf)"),
+            ("Tab ⇧Tab", "complete in any prompt"),
             ("~", "home"),
             (".", "toggle hidden"),
             ("^r", "reload"),
@@ -608,6 +659,11 @@ fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
         Line::from("  Enter accept & next · type to replace · ↑/↓ move · Esc cancel".fg(DIM))
     };
     f.render_widget(button, button_area);
+
+    let on_dir_field = form.fields.get(form.step).is_some_and(|fl| fl.dir);
+    if let Some(c) = form.completer.as_ref().filter(|_| on_dir_field) {
+        draw_completions(f, c, fields_area.x + 1 + LABEL_W as u16, fields_area.y + form.step as u16, false);
+    }
 }
 
 /// Keeps the end of a path, which is the part that matters: `…/deep/dir`.

@@ -1,6 +1,7 @@
 mod ansi;
 mod app;
 mod browser;
+mod complete;
 mod config;
 mod form;
 mod git;
