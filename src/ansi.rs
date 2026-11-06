@@ -18,11 +18,24 @@ pub fn parse_line(raw: &str) -> Line<'static> {
     while let Some(c) = chars.next() {
         match c {
             '\x1b' => {
-                if chars.peek() != Some(&'[') {
-                    chars.next();
-                    continue;
+                match chars.next() {
+                    Some('[') => {}
+                    // OSC (e.g. cargo's OSC 8 hyperlinks): skip to BEL or ST (ESC \).
+                    Some(']') => {
+                        while let Some(o) = chars.next() {
+                            if o == '\x07' || (o == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    // Charset selection like ESC ( B carries one more byte.
+                    Some('(' | ')') => {
+                        chars.next();
+                        continue;
+                    }
+                    _ => continue,
                 }
-                chars.next();
                 let mut params = String::new();
                 let mut fin = None;
                 for p in chars.by_ref() {
@@ -114,4 +127,29 @@ fn bright(n: u16) -> Color {
         Color::LightCyan,
         Color::White,
     ][n as usize]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(l: &Line) -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn strips_osc8_hyperlinks() {
+        // What cargo prints for "Finished `release` profile".
+        let raw = "\x1b[1m\x1b[92mFinished\x1b[0m \x1b]8;;https://doc.rust-lang.org/cargo/x\x1b\\`release` profile\x1b]8;;\x1b\\ [optimized]";
+        assert_eq!(text(&parse_line(raw)), "Finished `release` profile [optimized]");
+        let bel = "a\x1b]8;;http://x\x07link\x1b]8;;\x07b";
+        assert_eq!(text(&parse_line(bel)), "alinkb");
+    }
+
+    #[test]
+    fn keeps_colors() {
+        let l = parse_line("\x1b[31mred\x1b[0m plain");
+        assert_eq!(l.spans[0].style.fg, Some(Color::Red));
+        assert_eq!(text(&l), "red plain");
+    }
 }

@@ -35,11 +35,10 @@ pub struct Candidate {
     /// Older than the newest source file in the project.
     pub stale: bool,
     pub installed: Installed,
-    /// Where `i` puts it: over the existing installed copy if there is one,
-    /// otherwise into the configured install dir.
+    /// Where `i` puts it: `<install_dir>/<name>`.
     pub dest: PathBuf,
-    /// A second installed copy in the install dir that `dest` shadows on $PATH.
-    pub shadowed: Option<PathBuf>,
+    /// Another copy earlier on $PATH that runs instead of `dest`.
+    pub shadowed_by: Option<PathBuf>,
 }
 
 const MAX_DEPTH: usize = 7;
@@ -105,10 +104,20 @@ fn walk(
         let exec = meta.permissions().mode() & 0o111 != 0 || name.ends_with(".exe");
         if exec && !is_library(&name) {
             found.push((path, meta.len(), modified));
-        } else if !in_target && modified > *newest_src {
+        } else if !in_target && modified > *newest_src && is_cargo_input(root, &path) {
             *newest_src = modified;
         }
     }
+}
+
+/// Files that make cargo rebuild: Rust sources anywhere, anything under src/
+/// (include_str! etc.), the manifest, lockfile and build script. Docs and other
+/// files don't, so editing a README mustn't mark a build stale.
+fn is_cargo_input(root: &Path, path: &Path) -> bool {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    path.extension().is_some_and(|e| e == "rs")
+        || rel.starts_with("src")
+        || matches!(rel.to_str(), Some("Cargo.toml" | "Cargo.lock" | "build.rs"))
 }
 
 fn is_library(name: &str) -> bool {
@@ -149,11 +158,11 @@ fn describe(
         return None;
     };
 
-    let dest = installed_copy(&name, install_dir).unwrap_or_else(|| install_dir.join(&name));
-    let shadowed = Some(install_dir.join(&name)).filter(|p| p.is_file() && *p != dest);
+    let dest = install_dir.join(&name);
+    let shadowed_by = shadowing_copy(&name, &dest);
     let installed = installed_state(&path, size, modified, &dest);
     let stale = rel.starts_with("target/") && newest_src > modified;
-    Some(Candidate { path, name, rel, kind, triple, arch, size, modified, stale, installed, dest, shadowed })
+    Some(Candidate { path, name, rel, kind, triple, arch, size, modified, stale, installed, dest, shadowed_by })
 }
 
 /// `target/release/foo` → ("release", None)
@@ -184,13 +193,45 @@ fn cargo_profile(rel: &Path) -> Option<(String, Option<String>)> {
     Some((kind, triple))
 }
 
-/// The copy your shell actually runs (first on $PATH), as long as it lives under
-/// $HOME so a project binary called `test` never matches /usr/bin/test.
-/// Falls back to a copy in the install dir that isn't on PATH.
-fn installed_copy(name: &str, install_dir: &Path) -> Option<PathBuf> {
-    crate::project::which(name)
-        .filter(|p| p.starts_with(crate::config::home()))
-        .or_else(|| Some(install_dir.join(name)).filter(|p| p.is_file()))
+/// The copy your shell runs instead of `dest`, if one comes first on $PATH.
+/// Only copies under $HOME count, so a project binary called `test` never
+/// "conflicts" with /usr/bin/test.
+fn shadowing_copy(name: &str, dest: &Path) -> Option<PathBuf> {
+    crate::project::which(name).filter(|p| p != dest && p.starts_with(crate::config::home()))
+}
+
+/// Shell command that removes an installed copy: `cargo uninstall` when cargo
+/// put it there (keeps cargo's records straight), plain `rm` otherwise.
+pub fn removal_cmd(path: &Path, name: &str) -> String {
+    let q = crate::project::quote;
+    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| crate::config::home().join(".cargo"));
+    if path.parent() == Some(&cargo_home.join("bin")) {
+        if let Some(pkg) = cargo_owner(&cargo_home, name) {
+            let qs = crate::project::quote_str;
+            return format!("cargo uninstall {} --bin {}", qs(&pkg), qs(name));
+        }
+    }
+    format!("rm -- {}", q(path))
+}
+
+/// Which `cargo install`ed package owns binary `name` (from .crates.toml).
+fn cargo_owner(cargo_home: &Path, name: &str) -> Option<String> {
+    let text = fs::read_to_string(cargo_home.join(".crates.toml")).ok()?;
+    let table: toml::Table = toml::from_str(&text).ok()?;
+    table.get("v1")?.as_table()?.iter().find_map(|(key, bins)| {
+        let owns = bins.as_array()?.iter().any(|b| b.as_str() == Some(name));
+        // Keys look like "mainframe 0.1.0 (path+file:///…)".
+        owns.then(|| key.split_whitespace().next().unwrap_or(key).to_string())
+    })
+}
+
+/// `cargo install` into the configured install dir: `--root ~/.local` puts
+/// binaries in `~/.local/bin`. Plain `cargo install` would use ~/.cargo/bin.
+pub fn cargo_install_cmd(install_dir: &Path) -> String {
+    match install_dir.parent().filter(|_| install_dir.file_name().is_some_and(|n| n == "bin")) {
+        Some(root) => format!("cargo install --path . --root {}", crate::project::quote(root)),
+        None => "cargo install --path .".into(),
+    }
 }
 
 fn installed_state(src: &Path, size: u64, modified: SystemTime, dest: &Path) -> Installed {

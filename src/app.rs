@@ -73,6 +73,7 @@ pub enum Confirmed {
 
 pub struct InstallPicker {
     pub root: PathBuf,
+    pub install_dir: PathBuf,
     /// Offer `cargo install --path .` as the first row.
     pub cargo: bool,
     pub items: Vec<Candidate>,
@@ -861,6 +862,7 @@ impl App {
             .unwrap_or(if cargo && !items.is_empty() { 1 } else { 0 });
         self.mode = Mode::Install(InstallPicker {
             root,
+            install_dir: self.config.install_dir(),
             cargo,
             items,
             state: ListState::default().with_selected(Some(pos)),
@@ -880,9 +882,23 @@ impl App {
                 let chosen = picker.selected().cloned();
                 self.mode = Mode::Normal;
                 match chosen {
-                    None => self.start_task("cargo install".into(), Plan { cmd: "cargo install --path .".into(), cwd: root }),
+                    None => {
+                        let cmd = install::cargo_install_cmd(&self.config.install_dir());
+                        self.start_task("cargo install".into(), Plan { cmd, cwd: root });
+                    }
                     Some(c) => self.install_binary(&c, &root),
                 }
+            }
+            KeyCode::Char('u') => {
+                let Some(c) = picker.selected().cloned() else { return };
+                let Some(shadow) = c.shadowed_by.clone() else {
+                    return self.set_status("nothing shadows this one on PATH", Level::Info);
+                };
+                let cmd = install::removal_cmd(&shadow, &c.name);
+                self.mode = Mode::Confirm {
+                    msg: format!("Remove {} so {} runs? ({cmd}) [y/N]", config::pretty_path(&shadow), config::pretty_path(&c.dest)),
+                    action: Confirmed::Task(Plan { cmd, cwd: self.browser.cwd.clone() }),
+                };
             }
             KeyCode::Char('r') => {
                 if let Some(c) = picker.selected().cloned() {

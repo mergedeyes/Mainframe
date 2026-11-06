@@ -513,14 +513,14 @@ fn draw_git_menu(f: &mut Frame, info: Option<&git::GitInfo>, area: Rect) {
 }
 
 fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
-    let rect = popup(area, 120, picker.len() as u16 + 11);
+    let rect = popup(area, 120, picker.len() as u16 + 12);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(format!(" install from {} ", pretty_path(&picker.root)).bold()), true)
-        .title_bottom(Line::from(" Enter install · r run · Esc close ").right_aligned().fg(DIM));
+        .title_bottom(Line::from(" Enter install · r run · u remove shadowing copy · Esc close ").right_aligned().fg(DIM));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [head, list_area, details] =
-        Layout::vertical([Constraint::Length(1), Constraint::Fill(1), Constraint::Length(5)]).areas(inner);
+        Layout::vertical([Constraint::Length(1), Constraint::Fill(1), Constraint::Length(6)]).areas(inner);
 
     let row = |name: &str, kind: &str, arch: &str, size: &str, age: &str| {
         format!("{:<22} {:<16} {:<20} {:>8}  {:<10}", truncate(name, 22), truncate(kind, 16), truncate(arch, 20), size, age)
@@ -534,7 +534,7 @@ fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
     if picker.cargo {
         items.push(ListItem::new(Line::from(vec![
             Span::styled("⟳ cargo install --path .", Style::new().fg(Color::Yellow).bold()),
-            Span::styled("   build release from source into ~/.cargo/bin", Style::new().fg(DIM)),
+            Span::styled(format!("   build release from source into {}", pretty_path(&picker.install_dir)), Style::new().fg(DIM)),
         ])));
     }
     for c in &picker.items {
@@ -577,20 +577,25 @@ fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
                     Style::new().fg(if c.installed == Installed::Older { Color::LightRed } else { DIM }),
                 ),
             ]),
+            match &c.shadowed_by {
+                Some(other) => Line::from(
+                    format!("⚠ {} comes first on PATH and runs instead — u to remove it", pretty_path(other)).fg(Color::Yellow),
+                ),
+                None => Line::default(),
+            },
             if c.stale {
                 Line::from("sources changed after this was built — b / B to rebuild first".fg(Color::LightRed))
-            } else if let Some(other) = &c.shadowed {
-                Line::from(
-                    format!("also installed at {} — never runs, {} comes first on PATH", pretty_path(other), pretty_path(&c.dest))
-                        .fg(Color::Yellow),
-                )
             } else {
                 Line::default()
             },
         ],
         None => vec![
-            Line::from(vec![label("runs"), Span::raw("cargo install --path . (release build, may take a while)")]),
-            Line::from(vec![label("installs"), Span::raw("~/.cargo/bin/<bin name>")]),
+            Line::from(vec![
+                label("runs"),
+                Span::raw(install::cargo_install_cmd(&picker.install_dir)),
+                Span::styled("  (release build, may take a while)", Style::new().fg(DIM)),
+            ]),
+            Line::from(vec![label("installs"), Span::raw(format!("{}/<bin name>", pretty_path(&picker.install_dir)))]),
         ],
     };
     let [_, d] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(details);

@@ -3,7 +3,7 @@
 A terminal control room: browse files, edit, build, run, install and git — one key each.
 
 ```
-cargo install --path .        # or: run mainframe, press i, pick the release build
+cargo install --path . --root ~/.local   # → ~/.local/bin; or run mainframe, press i, Enter on the release build
 mainframe [DIR]
 ```
 
