@@ -32,7 +32,9 @@ Press `?` inside for all keys.
 | `@` / `W` | rerun the shown tab's command / watch mode: rerun (restart) it whenever a file in the project changes |
 | `n` `N` | jump to the next / previous `file:line` in the output (compiler errors, panics, tracebacks); `Enter` opens it in the editor at that line, `o` in VS Code |
 | `a A m d` | new file, new dir, rename/move, trash |
+| `Space` | mark entries (across folders); `y d s u` then act on all marked, `Esc` clears |
 | `y p P` | yank, paste copy, paste move |
+| `s` / `u` | git stage / unstage right in the list (no output pane) |
 | `v w z Tab + -` | preview, output pane, zoom output, focus output, resize |
 | `V` | modified files preview as their `git diff` (default) or their contents |
 | `,` | edit config (custom key-bound commands live there) |

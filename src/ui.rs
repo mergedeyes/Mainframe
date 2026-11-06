@@ -134,7 +134,11 @@ fn draw_browser(f: &mut Frame, app: &mut App, area: Rect) {
     let count = format!(" {}/{} ", b.state.selected().map_or(0, |i| i + 1), b.visible.len());
     let mut block = pane(Line::from(title), app.focus == Focus::Browser)
         .title_bottom(Line::from(count).right_aligned().fg(DIM));
-    if b.hidden_count > 0 {
+    if !b.marked.is_empty() {
+        block = block.title_bottom(
+            Line::from(format!(" {} marked · y d s u act on them · Esc clears ", b.marked.len())).fg(Color::Magenta),
+        );
+    } else if b.hidden_count > 0 {
         block = block.title_bottom(Line::from(format!(" {} hidden · . to show ", b.hidden_count)).fg(DIM));
     }
     let inner_w = area.width.saturating_sub(4) as usize; // borders + highlight symbol
@@ -159,13 +163,16 @@ fn draw_browser(f: &mut Frame, app: &mut App, area: Rect) {
                 Style::new()
             };
             let style = if e.name.starts_with('.') { style.add_modifier(Modifier::DIM) } else { style };
+            let marked = b.marked.contains(&e.path);
+            let style = if marked { style.fg(Color::Magenta).bold() } else { style };
             let name = if e.is_dir { format!("{}/", e.name) } else { e.name.clone() };
             let size = if e.is_dir { String::new() } else { human_size(e.size) };
-            let name_w = inner_w.saturating_sub(size.len() + 3);
+            let name_w = inner_w.saturating_sub(size.len() + 4);
             let name = truncate(&name, name_w);
-            let pad = inner_w.saturating_sub(2 + name.chars().count() + size.len());
+            let pad = inner_w.saturating_sub(3 + name.chars().count() + size.len());
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{mark} "), Style::new().fg(mark_col).bold()),
+                Span::styled(mark, Style::new().fg(mark_col).bold()),
+                Span::styled(if marked { "+ " } else { "  " }, Style::new().fg(Color::Magenta).bold()),
                 Span::styled(name, style),
                 Span::raw(" ".repeat(pad)),
                 Span::styled(size, Style::new().fg(DIM)),
@@ -488,8 +495,10 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("a / A", "new file / dir"),
             ("m F2", "rename / move"),
             ("d Del", "trash / delete"),
+            ("Space", "mark (y p P d s u use marks)"),
             ("y", "yank"),
             ("p / P", "paste copy / move"),
+            ("s / u", "git stage / unstage"),
         ],
     ),
     (

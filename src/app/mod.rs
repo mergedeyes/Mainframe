@@ -83,7 +83,7 @@ impl PromptKind {
 
 /// What happens when a y/N confirmation is answered with y.
 pub enum Confirmed {
-    Delete(PathBuf),
+    Delete(Vec<PathBuf>),
     Task(Plan),
 }
 
@@ -128,7 +128,7 @@ pub struct App {
     pub focus: Focus,
     pub mode: Mode,
     pub status: Option<(String, Level, Instant)>,
-    pub yank: Option<PathBuf>,
+    pub yank: Vec<PathBuf>,
 
     // Cached per selection / per directory, refreshed in `refresh`.
     sel_key: Option<Option<PathBuf>>,
@@ -172,7 +172,7 @@ impl App {
             focus: Focus::Browser,
             mode: Mode::Normal,
             status: None,
-            yank: None,
+            yank: Vec::new(),
             sel_key: None,
             info_cwd: PathBuf::new(),
             preview: None,
@@ -390,6 +390,9 @@ impl App {
                 if !self.browser.filter.is_empty() {
                     self.browser.filter.clear();
                     self.browser.apply_filter();
+                } else if !self.browser.marked.is_empty() {
+                    self.browser.marked.clear();
+                    self.set_status("marks cleared", Level::Info);
                 }
             }
             KeyCode::Char('c') => self.prompt(PromptKind::Cd, ""),
@@ -431,13 +434,10 @@ impl App {
                 }
             }
             KeyCode::Char('d') | KeyCode::Delete => self.confirm_delete(),
-            KeyCode::Char('y') => {
-                if let Some(e) = self.browser.selected() {
-                    let msg = format!("yanked {} — p to copy here, P to move here", e.name);
-                    self.yank = Some(e.path.clone());
-                    self.set_status(msg, Level::Info);
-                }
-            }
+            KeyCode::Char(' ') => self.browser.toggle_mark(),
+            KeyCode::Char('y') => self.yank_targets(),
+            KeyCode::Char('s') => self.stage(true),
+            KeyCode::Char('u') => self.stage(false),
             KeyCode::Char('p') => self.paste(false),
             KeyCode::Char('P') => self.paste(true),
 
@@ -523,7 +523,7 @@ impl App {
             return;
         }
         match action {
-            Confirmed::Delete(path) => self.delete(&path),
+            Confirmed::Delete(paths) => self.delete(&paths),
             Confirmed::Task(plan) => self.start_task(plan.cmd.replace(GIT, "git"), plan),
         }
     }

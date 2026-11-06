@@ -2,7 +2,10 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-use super::{App, Confirmed, Level, Mode, PromptKind};
+use super::{
+    App, Confirmed, Level, Mode, PromptKind,
+    files::{describe, run_quiet},
+};
 use crate::{
     config,
     form::{FormEvent, FormKind},
@@ -11,6 +14,34 @@ use crate::{
 };
 
 impl App {
+    /// s / u: stages or unstages the marked entries (or the selection) in place.
+    pub(super) fn stage(&mut self, add: bool) {
+        self.await_git();
+        if self.git.is_none() {
+            return self.set_status("not a git repository", Level::Err);
+        }
+        let paths = self.targets();
+        if paths.is_empty() {
+            return;
+        }
+        let files = paths.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ");
+        let cmd = if add {
+            format!("git add -A -- {files}")
+        } else {
+            // Before the first commit there's no HEAD to restore from.
+            format!("git restore --staged -- {files} 2>/dev/null || git rm -r -q --cached -- {files}")
+        };
+        match run_quiet(&cmd) {
+            Ok(()) => {
+                let verb = if add { "staged" } else { "unstaged" };
+                self.set_status(format!("{verb} {}", describe(&paths)), Level::Ok);
+                self.browser.marked.clear();
+            }
+            Err(e) => self.set_status(e.to_string(), Level::Err),
+        }
+        self.invalidate();
+    }
+
     pub(super) fn key_git(&mut self, key: KeyEvent) {
         self.mode = Mode::Normal;
         let KeyCode::Char(c) = key.code else { return };
@@ -19,6 +50,9 @@ impl App {
             return;
         }
         let cwd = self.browser.cwd.clone();
+        let targets = self.targets();
+        // Add, unstage and discard take every marked entry; log and blame want one file.
+        let many = targets.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ");
         let sel = self.browser.selected().map(|e| quote(&e.path));
         let needs_sel = matches!(c, 'L' | 'w' | 'a' | 'u' | 'x');
         let Some(f) = sel.or_else(|| (!needs_sel).then(String::new)) else {
@@ -33,9 +67,9 @@ impl App {
             'l' => format!("{GIT} log --graph --oneline --decorate --all -n 500"),
             'L' => format!("{GIT} log --follow --stat -n 100 -- {f}"),
             'w' => format!("{GIT} blame --date=short -- {f}"),
-            'a' => format!("{GIT} add -- {f} && {GIT} status --short"),
+            'a' => format!("{GIT} add -- {many} && {GIT} status --short"),
             'A' => format!("{GIT} add -A && {GIT} status --short"),
-            'u' => format!("{GIT} restore --staged -- {f} && {GIT} status --short"),
+            'u' => format!("{GIT} restore --staged -- {many} && {GIT} status --short"),
             'f' => format!("{GIT} fetch --all --prune"),
             'p' => format!("{GIT} pull"),
             'P' if self.git.as_ref().is_some_and(|g| !g.upstream) => format!("{GIT} push -u origin HEAD"),
@@ -53,10 +87,9 @@ impl App {
                 return self.foreground(Plan { cmd, cwd }, true);
             }
             'x' => {
-                let name = self.browser.selected().map(|e| e.name.clone()).unwrap_or_default();
                 self.mode = Mode::Confirm {
-                    msg: format!("Discard all uncommitted changes to {name}? [y/N]"),
-                    action: Confirmed::Task(Plan { cmd: format!("{GIT} restore -- {f}"), cwd }),
+                    msg: format!("Discard all uncommitted changes to {}? [y/N]", describe(&targets)),
+                    action: Confirmed::Task(Plan { cmd: format!("{GIT} restore -- {many}"), cwd }),
                 };
                 return;
             }

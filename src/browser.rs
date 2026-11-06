@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     fs,
     io::Read,
@@ -29,6 +30,8 @@ pub struct Browser {
     /// Dotfiles skipped by the last load (when `show_hidden` is off).
     pub hidden_count: usize,
     pub error: Option<String>,
+    /// Entries marked with Space, kept across directories.
+    pub marked: BTreeSet<PathBuf>,
 }
 
 impl Browser {
@@ -42,6 +45,7 @@ impl Browser {
             show_hidden,
             hidden_count: 0,
             error: None,
+            marked: BTreeSet::new(),
         };
         b.reload();
         b
@@ -107,6 +111,15 @@ impl Browser {
             .selected()
             .and_then(|i| self.visible.get(i))
             .map(|&i| &self.entries[i])
+    }
+
+    /// Space: marks or unmarks the selection and moves on.
+    pub fn toggle_mark(&mut self) {
+        let Some(path) = self.selected().map(|e| e.path.clone()) else { return };
+        if !self.marked.remove(&path) {
+            self.marked.insert(path);
+        }
+        self.move_by(1);
     }
 
     pub fn select_name(&mut self, name: &str) {
