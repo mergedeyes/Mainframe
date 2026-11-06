@@ -486,8 +486,11 @@ fn popup(area: Rect, w: u16, h: u16) -> Rect {
     Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
 }
 
-const HELP: &[(&str, &[(&str, &str)])] = &[
-    (
+type HelpSection = (&'static str, &'static [(&'static str, &'static str)]);
+
+/// Three columns, sized to fit a 30-row terminal.
+const HELP: [&[HelpSection]; 3] = [
+    &[(
         "navigate",
         &[
             ("j k ↑ ↓", "move"),
@@ -495,95 +498,101 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("l →", "enter dir"),
             ("Enter", "enter dir / edit file"),
             ("Home End", "first / last"),
-            ("PgUp PgDn ^u ^d", "page"),
+            ("PgUp PgDn", "page (also ^u ^d)"),
             ("/", "filter"),
-            ("^P", "find any file in the project"),
+            ("^P", "find file in project"),
             ("c", "go to path / zoxide"),
-            ("Z", "zoxide picker (fzf)"),
-            ("Tab ⇧Tab", "complete in any prompt"),
+            ("Z", "zoxide picker"),
+            ("Tab ⇧Tab", "complete in prompts"),
             ("~", "home"),
             (".", "toggle hidden"),
             ("^r", "reload"),
         ],
-    ),
-    (
-        "do",
-        &[
-            ("e", "edit in nano ($editor)"),
-            ("o / O", "VS Code: file / project"),
-            ("r", "run → output pane"),
-            ("R", "run in full terminal"),
-            ("b / B", "build / release build"),
-            ("t", "test"),
-            ("T", "all project tasks (scripts, targets…)"),
-            ("i", "install picker"),
-            ("g", "git menu"),
-            (":", "shell command"),
-            ("!", "open shell here"),
-            ("x  ^c", "kill task · x closes a done tab"),
-            ("@", "rerun the shown tab's command"),
-            ("W", "watch: rerun it on file changes"),
-            (",", "edit config"),
-        ],
-    ),
-    (
-        "files",
-        &[
-            ("a / A", "new file / dir"),
-            ("m F2", "rename / move"),
-            ("d Del", "trash / delete"),
-            ("Space", "mark (y p P d s u use marks)"),
-            ("y", "yank"),
-            ("p / P", "paste copy / move"),
-            ("s / u", "git stage / unstage"),
-        ],
-    ),
-    (
-        "view",
-        &[
-            ("S", "sort: name / newest / largest"),
-            ("v", "toggle preview"),
-            ("V", "diff / contents for changed files"),
-            ("w", "toggle output pane"),
-            ("z", "zoom output"),
-            ("[ / ]", "previous / next output tab"),
-            ("n / N", "next / prev file:line in output"),
-            ("/  ^S", "(in output) search · save to file"),
-            ("Tab", "focus output (scroll)"),
-            ("+ / -", "resize output"),
-            ("q", "quit"),
-        ],
-    ),
+    )],
+    &[
+        (
+            "do",
+            &[
+                ("e", "edit in $editor"),
+                ("o / O", "VS Code file / project"),
+                ("r / R", "run here / in terminal"),
+                ("b / B", "build / release build"),
+                ("t / T", "test / all tasks"),
+                ("i", "install picker"),
+                ("g", "git menu"),
+                (":", "shell command"),
+                ("!", "open shell here"),
+                (",", "edit config"),
+            ],
+        ),
+        (
+            "files",
+            &[
+                ("a / A", "new file / dir"),
+                ("m F2", "rename / move"),
+                ("d Del", "trash / delete"),
+                ("Space", "mark (for y d s u)"),
+                ("y", "yank"),
+                ("p / P", "paste copy / move"),
+                ("s / u", "git stage / unstage"),
+            ],
+        ),
+    ],
+    &[
+        (
+            "output",
+            &[
+                ("Tab", "focus output pane"),
+                ("w / z", "show / zoom output"),
+                ("+ / -", "resize output"),
+                ("[ / ]", "prev / next tab"),
+                ("x ^c", "kill · x closes tab"),
+                ("@ / W", "rerun / watch"),
+                ("n / N", "next / prev file:line"),
+                ("/  ^S", "search / save it"),
+            ],
+        ),
+        (
+            "view",
+            &[
+                ("S", "sort name/newest/size"),
+                ("v / V", "preview / git diff"),
+                ("q", "quit"),
+            ],
+        ),
+    ],
 ];
 
-fn help_column(sections: &'static [(&'static str, &'static [(&'static str, &'static str)])]) -> Vec<Line<'static>> {
+fn help_column(sections: &[HelpSection]) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for (title, keys) in sections {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
         lines.push(Line::from(title.to_uppercase().fg(Color::Yellow).bold()));
         for (k, d) in keys.iter() {
             lines.push(Line::from(vec![
-                Span::styled(format!("  {k:<16}"), Style::new().fg(ACCENT).bold()),
+                Span::styled(format!("  {k:<11}"), Style::new().fg(ACCENT).bold()),
                 Span::raw(*d),
             ]));
         }
-        lines.push(Line::default());
     }
     lines
 }
 
 fn draw_help(f: &mut Frame, area: Rect) {
-    let left = help_column(&HELP[..2]);
-    let right = help_column(&HELP[2..]);
-    let h = left.len().max(right.len()) as u16 + 2;
-    let rect = popup(area, 92, h);
+    let columns = HELP.map(help_column);
+    let h = columns.iter().map(Vec::len).max().unwrap_or(0) as u16 + 2;
+    let rect = popup(area, 110, h);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(" keys ".bold()), true)
         .title_bottom(Line::from(" custom keys: , to edit config · any key to close ").right_aligned().fg(DIM));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let [l, r] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(inner);
-    f.render_widget(Paragraph::new(left), l);
-    f.render_widget(Paragraph::new(right), r);
+    let areas = Layout::horizontal([Constraint::Ratio(1, 3); 3]).split(inner);
+    for (lines, area) in columns.into_iter().zip(areas.iter()) {
+        f.render_widget(Paragraph::new(lines), *area);
+    }
 }
 
 fn git_column(groups: &'static [(&'static str, &'static [git::MenuItem])]) -> Vec<Line<'static>> {
