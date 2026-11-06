@@ -31,6 +31,10 @@ preview = true
 # and folders you browse here are added to its database.
 zoxide = true
 
+# Project .desktop entries when installing a binary with `i`:
+# "ask" shows a diff first, "always" updates silently, "never" leaves them alone.
+desktop_entries = "ask"
+
 # Override or add run commands per file extension (used by `r` / `R`).
 [runners]
 # py = "python3 {file}"
@@ -66,6 +70,7 @@ pub struct Config {
     pub show_hidden: bool,
     pub preview: bool,
     pub zoxide: bool,
+    pub desktop_entries: DesktopMode,
     pub runners: HashMap<String, String>,
     pub actions: Vec<Action>,
 }
@@ -79,10 +84,19 @@ impl Default for Config {
             show_hidden: true,
             preview: true,
             zoxide: true,
+            desktop_entries: DesktopMode::Ask,
             runners: HashMap::new(),
             actions: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DesktopMode {
+    Ask,
+    Always,
+    Never,
 }
 
 #[derive(Debug, Clone, Deserialize)]

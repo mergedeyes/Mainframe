@@ -1,5 +1,7 @@
 //! Finds installable executables in a project and describes what they were built for.
 
+use crate::desktop::DesktopPlan;
+
 use std::{
     fs::{self, File},
     io::Read,
@@ -39,6 +41,8 @@ pub struct Candidate {
     pub dest: PathBuf,
     /// Another copy earlier on $PATH that runs instead of `dest`.
     pub shadowed_by: Option<PathBuf>,
+    /// The project's .desktop entries that launch this binary.
+    pub desktop: Vec<DesktopPlan>,
 }
 
 const MAX_DEPTH: usize = 7;
@@ -162,7 +166,7 @@ fn describe(
     let shadowed_by = shadowing_copy(&name, &dest);
     let installed = installed_state(&path, size, modified, &dest);
     let stale = rel.starts_with("target/") && newest_src > modified;
-    Some(Candidate { path, name, rel, kind, triple, arch, size, modified, stale, installed, dest, shadowed_by })
+    Some(Candidate { path, name, rel, kind, triple, arch, size, modified, stale, installed, dest, shadowed_by, desktop: Vec::new() })
 }
 
 /// `target/release/foo` → ("release", None)
@@ -205,12 +209,11 @@ fn shadowing_copy(name: &str, dest: &Path) -> Option<PathBuf> {
 pub fn removal_cmd(path: &Path, name: &str) -> String {
     let q = crate::project::quote;
     let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| crate::config::home().join(".cargo"));
-    if path.parent() == Some(&cargo_home.join("bin")) {
-        if let Some(pkg) = cargo_owner(&cargo_home, name) {
+    if path.parent() == Some(&cargo_home.join("bin"))
+        && let Some(pkg) = cargo_owner(&cargo_home, name) {
             let qs = crate::project::quote_str;
             return format!("cargo uninstall {} --bin {}", qs(&pkg), qs(name));
         }
-    }
     format!("rm -- {}", q(path))
 }
 

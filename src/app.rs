@@ -18,7 +18,8 @@ use ratatui::{
 use crate::{
     browser::{self, Browser, Preview},
     complete::{self, Completer},
-    config::{self, Action, Config},
+    config::{self, Action, Config, DesktopMode},
+    desktop::{self, DesktopPlan},
     form::{Form, FormEvent, FormKind},
     git::{self, GIT, GitInfo},
     install::{self, Candidate},
@@ -35,6 +36,7 @@ pub enum Mode {
     GitMenu,
     Install(InstallPicker),
     Form(Form),
+    DesktopReview(DesktopReview),
 }
 
 #[derive(Clone)]
@@ -78,9 +80,19 @@ pub struct InstallPicker {
     pub cargo: bool,
     pub items: Vec<Candidate>,
     pub state: ListState,
+    /// Desktop entries for the `cargo install` row.
+    pub cargo_desktop: Vec<DesktopPlan>,
 }
 
 impl InstallPicker {
+    /// Desktop entries belonging to the selected row.
+    pub fn selected_desktop(&self) -> &[DesktopPlan] {
+        match self.selected() {
+            Some(c) => &c.desktop,
+            None => &self.cargo_desktop,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.items.len() + self.cargo as usize
     }
@@ -90,6 +102,22 @@ impl InstallPicker {
         let i = self.state.selected()?;
         self.items.get(i.checked_sub(self.cargo as usize)?)
     }
+}
+
+/// Walks through desktop entries that would change, one diff at a time.
+pub struct DesktopReview {
+    pub plans: Vec<DesktopPlan>,
+    pub idx: usize,
+    pub accepted: Vec<DesktopPlan>,
+    pub then: AfterReview,
+    pub scroll: u16,
+}
+
+/// What the review was gating.
+pub enum AfterReview {
+    InstallBinary(Box<Candidate>, PathBuf),
+    CargoInstall(PathBuf),
+    Nothing,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -271,6 +299,7 @@ impl App {
             Mode::GitMenu => self.key_git(key),
             Mode::Install(_) => self.key_install(key),
             Mode::Form(_) => self.key_form(key),
+            Mode::DesktopReview(_) => self.key_desktop_review(key),
             Mode::Normal => self.key_normal(key),
         }
         if !self.show_output {
@@ -849,7 +878,12 @@ impl App {
         let project = project::detect(&start);
         let root = project.as_ref().map_or_else(|| self.browser.cwd.clone(), |p| p.root.clone());
         let cargo = project.as_ref().is_some_and(|p| p.kind == Kind::Cargo);
-        let items = install::scan(&root, &self.config.install_dir());
+        let install_dir = self.config.install_dir();
+        let mut items = install::scan(&root, &install_dir);
+        for c in &mut items {
+            c.desktop = desktop::plans(&root, Some(&c.name), &install_dir);
+        }
+        let cargo_desktop = if cargo { desktop::plans(&root, None, &install_dir) } else { Vec::new() };
         if items.is_empty() && !cargo {
             self.set_status(format!("no executables found under {}", config::pretty_path(&root)), Level::Err);
             return;
@@ -862,10 +896,11 @@ impl App {
             .unwrap_or(if cargo && !items.is_empty() { 1 } else { 0 });
         self.mode = Mode::Install(InstallPicker {
             root,
-            install_dir: self.config.install_dir(),
+            install_dir,
             cargo,
             items,
             state: ListState::default().with_selected(Some(pos)),
+            cargo_desktop,
         });
     }
 
@@ -879,15 +914,25 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => picker.state.select(Some(cur.saturating_sub(1))),
             KeyCode::Enter | KeyCode::Char('i') => {
                 let root = picker.root.clone();
-                let chosen = picker.selected().cloned();
+                let plans = picker.selected_desktop().to_vec();
+                let then = match picker.selected().cloned() {
+                    Some(c) => AfterReview::InstallBinary(Box::new(c), root),
+                    None => AfterReview::CargoInstall(root),
+                };
                 self.mode = Mode::Normal;
-                match chosen {
-                    None => {
-                        let cmd = install::cargo_install_cmd(&self.config.install_dir());
-                        self.start_task("cargo install".into(), Plan { cmd, cwd: root });
-                    }
-                    Some(c) => self.install_binary(&c, &root),
+                let ask = self.config.desktop_entries == DesktopMode::Ask;
+                match self.config.desktop_entries {
+                    DesktopMode::Never => self.finish_install(then, Vec::new()),
+                    _ => self.review_desktop(then, plans, ask),
                 }
+            }
+            KeyCode::Char('d') => {
+                let plans = picker.selected_desktop().to_vec();
+                if plans.is_empty() {
+                    return self.set_status("no .desktop entry in this project launches it", Level::Info);
+                }
+                self.mode = Mode::Normal;
+                self.review_desktop(AfterReview::Nothing, plans, true);
             }
             KeyCode::Char('u') => {
                 let Some(c) = picker.selected().cloned() else { return };
@@ -908,6 +953,87 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Shows diffs for entries that would change (when `ask`), otherwise goes
+    /// straight to installing.
+    fn review_desktop(&mut self, then: AfterReview, plans: Vec<DesktopPlan>, ask: bool) {
+        let todo: Vec<DesktopPlan> = plans.into_iter().filter(DesktopPlan::needs_update).collect();
+        if todo.is_empty() {
+            if matches!(then, AfterReview::Nothing) {
+                self.set_status("desktop entry is up to date", Level::Ok);
+            }
+            return self.finish_install(then, Vec::new());
+        }
+        if !ask {
+            return self.finish_install(then, todo);
+        }
+        self.mode = Mode::DesktopReview(DesktopReview { plans: todo, idx: 0, accepted: Vec::new(), then, scroll: 0 });
+    }
+
+    fn key_desktop_review(&mut self, key: KeyEvent) {
+        let Mode::DesktopReview(review) = &mut self.mode else { return };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.mode = Mode::Normal;
+                self.set_status("cancelled — nothing installed", Level::Info)
+            }
+            KeyCode::Char('j') | KeyCode::Down => review.scroll = review.scroll.saturating_add(1),
+            KeyCode::Char('k') | KeyCode::Up => review.scroll = review.scroll.saturating_sub(1),
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('n') => {
+                if key.code != KeyCode::Char('n') {
+                    review.accepted.push(review.plans[review.idx].clone());
+                }
+                review.idx += 1;
+                review.scroll = 0;
+                if review.idx == review.plans.len() {
+                    let Mode::DesktopReview(review) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
+                    self.finish_install(review.then, review.accepted);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn finish_install(&mut self, then: AfterReview, desktop: Vec<DesktopPlan>) {
+        match then {
+            AfterReview::InstallBinary(c, root) => self.install_binary(&c, &root),
+            AfterReview::CargoInstall(root) => {
+                let cmd = install::cargo_install_cmd(&self.config.install_dir());
+                self.start_task("cargo install".into(), Plan { cmd, cwd: root });
+            }
+            AfterReview::Nothing => {}
+        }
+
+        let mut written = Vec::new();
+        let mut sudo = Vec::new();
+        for plan in &desktop {
+            if plan.system {
+                match desktop::system_cmd(plan) {
+                    Ok(cmd) => sudo.push(cmd),
+                    Err(e) => return self.set_status(format!("desktop entry: {e}"), Level::Err),
+                }
+            } else if let Err(e) = desktop::apply_user(plan) {
+                return self.set_status(format!("desktop entry {}: {e}", plan.target.display()), Level::Err);
+            } else {
+                written.push(config::pretty_path(&plan.target));
+            }
+        }
+        if !written.is_empty() {
+            if project::which("update-desktop-database").is_some() {
+                let dir = desktop::app_dirs()[0].clone();
+                self.spawn_detached(&format!("update-desktop-database -q {}", quote(&dir)));
+            }
+            let msg = format!("desktop entry updated: {}", written.join(", "));
+            if self.task_running() {
+                // The task's own result will take over the status line; keep a record in its output.
+                self.output.push(Line::from(Span::styled(format!("✔ {msg}"), Style::new().fg(Color::Green))));
+            }
+            self.set_status(msg, Level::Ok);
+        }
+        if !sudo.is_empty() {
+            self.foreground(Plan { cmd: sudo.join(" && "), cwd: self.browser.cwd.clone() }, true);
         }
     }
 

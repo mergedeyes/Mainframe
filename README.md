@@ -21,7 +21,7 @@ Press `?` inside for all keys.
 | `o` / `O` | open file / whole project in VS Code |
 | `r` / `R` | run in output pane / in the full terminal (for interactive programs) |
 | `b` / `B` / `t` | build / release build / test |
-| `i` | install picker: every executable in the project with profile, target, arch, age, install state |
+| `i` | install picker: every executable in the project with profile, target, arch, age, install state; also updates the project's `.desktop` entry (shows a diff first, `d` to review it alone) |
 | `g` | git menu: status, diff, log, stage, commit, push/pull, branches, stash, `gh repo create` |
 | `:` / `!` | run a shell command / open your shell here |
 | `x` | kill the running task |
