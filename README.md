@@ -16,7 +16,7 @@ Press `?` inside for all keys.
 |---|---|
 | `j k` / arrows, `h l` | move, parent, enter |
 | `Enter` | enter dir / edit text file / run executable |
-| `/` · `c` · `~` · `.` | filter · go to path · home · toggle hidden |
+| `/` · `c` · `Z` · `~` · `.` | filter · go to path or zoxide keywords · zoxide picker · home · toggle hidden |
 | `e` | edit in nano (configurable) |
 | `o` / `O` | open file / whole project in VS Code |
 | `r` / `R` | run in output pane / in the full terminal (for interactive programs) |

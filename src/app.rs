@@ -55,7 +55,7 @@ impl PromptKind {
             PromptKind::NewFile => "new file",
             PromptKind::NewDir => "new dir",
             PromptKind::Rename(_) => "rename/move to",
-            PromptKind::Cd => "go to",
+            PromptKind::Cd => "go to (path or zoxide keywords)",
             PromptKind::Commit { all: false } => "commit message",
             PromptKind::Commit { all: true } => "commit all, message",
             PromptKind::SwitchBranch => "switch to branch",
@@ -110,6 +110,8 @@ pub struct Foreground {
     /// Pause with "press Enter" afterwards so output stays readable.
     pub wait: bool,
     pub then_reload_config: bool,
+    /// Capture stdout (the tty stays free for pickers like fzf) and cd to it.
+    pub cd_to_output: bool,
 }
 
 pub struct LastRun {
@@ -146,6 +148,8 @@ pub struct App {
 
     pub pending: Option<Foreground>,
     pub quit: bool,
+    /// zoxide is installed and enabled in the config.
+    zoxide: bool,
 }
 
 impl App {
@@ -173,7 +177,9 @@ impl App {
             browser_height: 10,
             pending: None,
             quit: false,
+            zoxide: false,
         };
+        app.zoxide = app.config.zoxide && project::which("zoxide").is_some();
         app.browser.select_first();
         match config_err {
             Some(e) => app.set_status(e, Level::Err),
@@ -235,6 +241,9 @@ impl App {
             return;
         }
         if self.sel_key.is_none() || self.info_cwd != self.browser.cwd {
+            if self.info_cwd != self.browser.cwd && self.zoxide {
+                self.spawn_detached(&format!("zoxide add -- {}", quote(&self.browser.cwd)));
+            }
             self.info_cwd = self.browser.cwd.clone();
             self.project = project::detect(&self.browser.cwd);
             self.git = git::status(&self.browser.cwd);
@@ -327,6 +336,7 @@ impl App {
                 }
             }
             KeyCode::Char('c') => self.prompt(PromptKind::Cd, ""),
+            KeyCode::Char('Z') => self.zoxide_pick(),
 
             // actions
             KeyCode::Char('e') => self.edit_selected(),
@@ -514,6 +524,7 @@ impl App {
             cwd: self.browser.cwd.clone(),
             wait: false,
             then_reload_config: false,
+            cd_to_output: false,
         });
     }
 
@@ -534,6 +545,7 @@ impl App {
             cwd: self.browser.cwd.clone(),
             wait: false,
             then_reload_config: true,
+            cd_to_output: false,
         });
     }
 
@@ -557,6 +569,7 @@ impl App {
             cwd: self.browser.cwd.clone(),
             wait: false,
             then_reload_config: false,
+            cd_to_output: false,
         });
     }
 
@@ -569,7 +582,7 @@ impl App {
     }
 
     fn foreground(&mut self, plan: Plan, wait: bool) {
-        self.pending = Some(Foreground { cmd: plan.cmd, cwd: plan.cwd, wait, then_reload_config: false });
+        self.pending = Some(Foreground { cmd: plan.cmd, cwd: plan.cwd, wait, then_reload_config: false, cd_to_output: false });
     }
 
     fn custom_action(&mut self, action: &Action) {
@@ -641,7 +654,13 @@ impl App {
     }
 
     /// Runs after a foreground command returns.
-    pub fn after_foreground(&mut self, fg: &Foreground) {
+    pub fn after_foreground(&mut self, fg: &Foreground, output: Option<String>) {
+        if fg.cd_to_output {
+            let dir = output.map(|o| PathBuf::from(o.trim())).filter(|d| d.is_dir());
+            if let Some(dir) = dir {
+                self.browser.cd(dir);
+            }
+        }
         if fg.then_reload_config {
             let (cfg, err) = Config::load();
             self.config = cfg;
@@ -652,6 +671,41 @@ impl App {
         }
         self.browser.reload();
         self.invalidate();
+    }
+
+    // ── zoxide ─────────────────────────────────────────────────────────────
+
+    /// Best zoxide match for space-separated keywords, skipping where we already are.
+    fn zoxide_query(&self, input: &str) -> Option<PathBuf> {
+        if !self.zoxide {
+            return None;
+        }
+        let out = Command::new("zoxide")
+            .args(["query", "--exclude"])
+            .arg(&self.browser.cwd)
+            .arg("--")
+            .args(input.split_whitespace())
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())?;
+        let dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        dir.is_dir().then_some(dir)
+    }
+
+    fn zoxide_pick(&mut self) {
+        if !self.zoxide {
+            self.set_status("zoxide isn't installed (or is disabled in the config)", Level::Err);
+            return;
+        }
+        self.pending = Some(Foreground {
+            cmd: "zoxide query --interactive".into(),
+            cwd: self.browser.cwd.clone(),
+            wait: false,
+            then_reload_config: false,
+            cd_to_output: true,
+        });
     }
 
     // ── git ────────────────────────────────────────────────────────────────
@@ -892,8 +946,10 @@ impl App {
                     if let Some(name) = path.file_name() {
                         self.browser.select_name(&name.to_string_lossy());
                     }
+                } else if let Some(dir) = self.zoxide_query(&input) {
+                    self.browser.cd(dir);
                 } else {
-                    self.set_status(format!("no such path: {}", path.display()), Level::Err);
+                    self.set_status(format!("no such path or zoxide match: {input}"), Level::Err);
                 }
                 self.invalidate();
             }

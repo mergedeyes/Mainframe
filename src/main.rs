@@ -13,7 +13,7 @@ use std::{
     env,
     io::{self, Write},
     path::PathBuf,
-    process::Command,
+    process::{Command, Stdio},
     time::Duration,
 };
 
@@ -71,8 +71,8 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         }
 
         if let Some(fg) = app.pending.take() {
-            run_foreground(terminal, &fg)?;
-            app.after_foreground(&fg);
+            let output = run_foreground(terminal, &fg)?;
+            app.after_foreground(&fg, output);
         }
     }
     if let Some(task) = &mut app.task {
@@ -82,14 +82,25 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 }
 
 /// Hands the real terminal to a command (nano, an interactive program, a shell).
-fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground) -> Result<()> {
+/// Returns its stdout when `cd_to_output` asked for it to be captured.
+fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground) -> Result<Option<String>> {
     ratatui::restore();
     execute!(io::stdout(), cursor::Show)?;
     if fg.wait {
         println!("\x1b[2m$ {}\x1b[0m", fg.cmd);
     }
 
-    let status = Command::new("sh").arg("-c").arg(&fg.cmd).current_dir(&fg.cwd).status();
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(&fg.cmd).current_dir(&fg.cwd);
+    let (status, output) = if fg.cd_to_output {
+        // Pickers like fzf draw on /dev/tty, so piping stdout doesn't disturb them.
+        match command.stderr(Stdio::inherit()).output() {
+            Ok(out) => (Ok(out.status), Some(String::from_utf8_lossy(&out.stdout).into_owned())),
+            Err(e) => (Err(e), None),
+        }
+    } else {
+        (command.status(), None)
+    };
 
     if fg.wait {
         match status {
@@ -108,5 +119,5 @@ fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground) -> Result<()>
     // A fresh Terminal forces a full redraw; `terminal.clear()` would query the
     // cursor position, which some terminals answer slowly or not at all.
     *terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-    Ok(())
+    Ok(output)
 }

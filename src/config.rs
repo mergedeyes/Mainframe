@@ -27,6 +27,10 @@ install_dir = "~/.local/bin"
 show_hidden = true
 preview = true
 
+# Use zoxide (if installed): `c` accepts keywords, `Z` opens its picker,
+# and folders you browse here are added to its database.
+zoxide = true
+
 # Override or add run commands per file extension (used by `r` / `R`).
 [runners]
 # py = "python3 {file}"
@@ -61,6 +65,7 @@ pub struct Config {
     pub install_dir: String,
     pub show_hidden: bool,
     pub preview: bool,
+    pub zoxide: bool,
     pub runners: HashMap<String, String>,
     pub actions: Vec<Action>,
 }
@@ -73,6 +78,7 @@ impl Default for Config {
             install_dir: "~/.local/bin".into(),
             show_hidden: true,
             preview: true,
+            zoxide: true,
             runners: HashMap::new(),
             actions: Vec::new(),
         }
