@@ -35,6 +35,10 @@ zoxide = true
 # "ask" shows a diff first, "always" updates silently, "never" leaves them alone.
 desktop_entries = "ask"
 
+# Ring the terminal bell and send a desktop notification (notify-send) when a
+# task that ran at least this many seconds finishes. 0 turns it off.
+notify_after = 10
+
 # Override or add run commands per file extension (used by `r` / `R`).
 [runners]
 # py = "python3 {file}"
@@ -71,6 +75,7 @@ pub struct Config {
     pub preview: bool,
     pub zoxide: bool,
     pub desktop_entries: DesktopMode,
+    pub notify_after: u64,
     pub runners: HashMap<String, String>,
     pub actions: Vec<Action>,
 }
@@ -85,6 +90,7 @@ impl Default for Config {
             preview: true,
             zoxide: true,
             desktop_entries: DesktopMode::Ask,
+            notify_after: 10,
             runners: HashMap::new(),
             actions: Vec::new(),
         }

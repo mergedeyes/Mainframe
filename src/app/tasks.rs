@@ -1,5 +1,7 @@
 //! Output tabs: each holds one background task (running or finished) and what it printed.
 
+use std::io::Write;
+
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -9,7 +11,7 @@ use super::{App, Focus, Level};
 use crate::{
     config,
     git::GIT,
-    project::{self, Plan},
+    project::{self, Plan, quote_str},
     task::{Output, Task},
     watch::Watcher,
 };
@@ -69,6 +71,8 @@ impl App {
     /// Moves new output into every tab and wraps up tasks that finished.
     pub(super) fn poll_tasks(&mut self) {
         let mut done = None;
+        let mut notify = Vec::new();
+        let notify_after = self.config.notify_after;
         for tab in &mut self.tabs {
             let Some(task) = &mut tab.task else { continue };
             let Some((status, took)) = task.poll(&mut tab.output) else { continue };
@@ -85,7 +89,20 @@ impl App {
                 Style::new().fg(style).add_modifier(Modifier::BOLD),
             )));
             done = Some((format!("{}: {detail}", tab.label), if ok { Level::Ok } else { Level::Err }));
+            if notify_after > 0 && took.as_secs() >= notify_after {
+                notify.push((format!("{} {}", if ok { "✔" } else { "✘" }, tab.label), detail.clone()));
+            }
             tab.last_run = Some(LastRun { label: tab.label.clone(), ok, detail });
+        }
+        if !notify.is_empty() {
+            // The bell marks the terminal urgent; the notification is for when it's not in view.
+            print!("\x07");
+            let _ = std::io::stdout().flush();
+            if project::which("notify-send").is_some() {
+                for (summary, body) in notify {
+                    self.spawn_detached(&format!("notify-send -a Mainframe {} {}", quote_str(&summary), quote_str(&body)));
+                }
+            }
         }
         if let Some((msg, level)) = done {
             self.set_status(msg, level);

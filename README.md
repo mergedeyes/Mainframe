@@ -57,7 +57,8 @@ Use `R`, `!` or an `interactive = true` custom action for those.
 ## Config
 
 `~/.config/mainframe/config.toml`. Press `,` to create and open it. It has editor, VS Code
-command, install dir, per-extension runners and custom actions:
+command, install dir, when to notify about finished tasks (`notify_after`, seconds), per-extension
+runners and custom actions:
 
 ```toml
 [[actions]]
