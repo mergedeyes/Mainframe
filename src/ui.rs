@@ -267,6 +267,9 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let out = &mut app.tabs[app.tab].output;
+    if !out.locs.is_empty() {
+        title.push(Span::styled(format!("{} file:line · n N jump ", out.locs.len()), Style::new().fg(Color::Yellow)));
+    }
     out.height = height;
     // The pane may have shrunk (resize, zoom off) since the last scroll.
     out.scroll = out.scroll.min(out.max_scroll());
@@ -277,12 +280,24 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
             Line::from(format!(" ↑ {} lines up · End to follow ", out.scroll)).right_aligned().fg(Color::Yellow),
         );
     } else if focused {
-        block = block.title_bottom(Line::from(" ↑↓ PgUp PgDn scroll · [ ] tabs · z zoom · Tab back ").right_aligned().fg(DIM));
+        let hint = if out.selected_loc().is_some() {
+            " Enter edit · o VS Code · n N next/prev · Tab back "
+        } else {
+            " ↑↓ PgUp PgDn scroll · [ ] tabs · z zoom · Tab back "
+        };
+        block = block.title_bottom(Line::from(hint).right_aligned().fg(DIM));
     }
 
     let end = out.lines.len().saturating_sub(out.scroll);
     let start = end.saturating_sub(height);
-    f.render_widget(Paragraph::new(out.lines[start..end].to_vec()).block(block), area);
+    let picked = out.selected_loc().map(|(i, _)| *i);
+    let lines: Vec<Line> = (start..end)
+        .map(|i| match picked {
+            Some(p) if p == i => out.lines[i].clone().patch_style(Style::new().bg(Color::DarkGray)),
+            _ => out.lines[i].clone(),
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn spinner(task: &Task) -> &'static str {
@@ -457,6 +472,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("w", "toggle output pane"),
             ("z", "zoom output"),
             ("[ / ]", "previous / next output tab"),
+            ("n / N", "next / prev file:line in output"),
             ("Tab", "focus output (scroll)"),
             ("+ / -", "resize output"),
             ("q", "quit"),

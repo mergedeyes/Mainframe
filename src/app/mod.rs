@@ -356,6 +356,8 @@ impl App {
                 self.mode = Mode::GitMenu;
             }
             KeyCode::Char('x') => self.kill_task(),
+            KeyCode::Char('n') => self.step_loc(true),
+            KeyCode::Char('N') => self.step_loc(false),
             KeyCode::Char('[') => self.switch_tab(-1),
             KeyCode::Char(']') => self.switch_tab(1),
             KeyCode::Char(':') => self.prompt(PromptKind::Command, ""),
@@ -415,6 +417,8 @@ impl App {
             KeyCode::PageUp => out.scroll_by(page),
             KeyCode::Home => out.scroll_to_top(),
             KeyCode::End => out.scroll = 0,
+            KeyCode::Enter => return self.open_loc(false),
+            KeyCode::Char('o') => return self.open_loc(true),
             KeyCode::Esc => self.focus = Focus::Browser,
             _ => return false,
         }

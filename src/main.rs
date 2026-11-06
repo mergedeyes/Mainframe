@@ -8,6 +8,7 @@ mod form;
 mod git;
 mod install;
 mod line;
+mod locate;
 mod project;
 mod task;
 mod ui;

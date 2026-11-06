@@ -12,6 +12,7 @@ use super::{App, Foreground, Level};
 use crate::{
     browser,
     config::{self, Action, Config},
+    locate,
     project::{self, Op, Plan, quote, quote_str},
 };
 
@@ -56,6 +57,24 @@ impl App {
             then_reload_config: false,
             cd_to_output: false,
         });
+    }
+
+    /// Opens the location picked with n / N in the editor, or in VS Code.
+    pub(super) fn open_loc(&mut self, vscode: bool) -> bool {
+        let Some((_, loc)) = self.tab().output.selected_loc().cloned() else { return false };
+        if vscode {
+            self.spawn_detached(&locate::editor_cmd(&self.config.vscode, &loc));
+            self.set_status(format!("opened {}:{} in VS Code", config::pretty_path(&loc.path), loc.line), Level::Ok);
+        } else {
+            self.pending = Some(Foreground {
+                cmd: locate::editor_cmd(&self.config.editor, &loc),
+                cwd: self.browser.cwd.clone(),
+                wait: false,
+                then_reload_config: false,
+                cd_to_output: false,
+            });
+        }
+        true
     }
 
     pub(super) fn edit_config(&mut self) {

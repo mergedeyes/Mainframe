@@ -27,6 +27,7 @@ Press `?` inside for all keys.
 | `:` / `!` | run a shell command / open your shell here |
 | `x` | kill the shown task, or close its tab once it's done |
 | `[` `]` | previous / next output tab |
+| `n` `N` | jump to the next / previous `file:line` in the output (compiler errors, panics, tracebacks); `Enter` opens it in the editor at that line, `o` in VS Code |
 | `a A m d` | new file, new dir, rename/move, trash |
 | `y p P` | yank, paste copy, paste move |
 | `v w z Tab + -` | preview, output pane, zoom output, focus output, resize |

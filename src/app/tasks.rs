@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use super::{App, Level};
+use super::{App, Focus, Level};
 use crate::{
     config,
     git::GIT,
@@ -103,7 +103,7 @@ impl App {
             self.set_status(format!("{MAX_TABS} tasks are running — x kills the shown one"), Level::Err);
             return;
         };
-        let mut output = Output::default();
+        let mut output = Output::new(&plan.cwd);
         output.push(Line::from(vec![
             Span::styled("$ ", Style::new().fg(Color::DarkGray)),
             Span::styled(plan.cmd.replace(GIT, "git"), Style::new().add_modifier(Modifier::BOLD)),
@@ -139,6 +139,29 @@ impl App {
             }
             None => self.set_status("nothing running", Level::Info),
         }
+    }
+
+    /// n / N: picks the next or previous `file:line` in the shown output.
+    pub(super) fn step_loc(&mut self, forward: bool) {
+        let out = &mut self.tabs[self.tab].output;
+        let total = out.locs.len();
+        if !out.step_loc(forward) {
+            self.set_status("no file:line locations in this output", Level::Info);
+            return;
+        }
+        let Some((_, loc)) = out.selected_loc() else { return };
+        let path = match loc.path.strip_prefix(&self.browser.cwd) {
+            Ok(rel) => rel.display().to_string(),
+            Err(_) => config::pretty_path(&loc.path),
+        };
+        let msg = format!(
+            "{}/{total}  {path}:{} — Enter edits · o opens in VS Code",
+            out.cursor.unwrap_or(0) + 1,
+            loc.line,
+        );
+        self.show_output = true;
+        self.focus = Focus::Output;
+        self.set_status(msg, Level::Info);
     }
 
     pub(super) fn switch_tab(&mut self, delta: isize) {

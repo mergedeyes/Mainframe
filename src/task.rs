@@ -3,7 +3,7 @@
 use std::{
     io::{BufRead, BufReader, Read},
     os::unix::process::CommandExt,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
@@ -12,7 +12,10 @@ use std::{
 
 use ratatui::text::Line;
 
-use crate::ansi;
+use crate::{
+    ansi,
+    locate::{self, Loc},
+};
 
 const MAX_LINES: usize = 20_000;
 
@@ -106,19 +109,65 @@ pub struct Output {
     pub scroll: usize,
     /// Visible rows, set by the UI each frame.
     pub height: usize,
+    /// Where the task ran; relative paths in its output start here.
+    cwd: PathBuf,
+    /// `file:line` references, by line index, in order.
+    pub locs: Vec<(usize, Loc)>,
+    /// Index into `locs` of the one picked with n / N.
+    pub cursor: Option<usize>,
 }
 
 impl Output {
+    pub fn new(cwd: &Path) -> Self {
+        Self { cwd: cwd.to_path_buf(), ..Self::default() }
+    }
+
     pub fn push(&mut self, line: Line<'static>) {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        if let Some(loc) = locate::find(&text, &self.cwd) {
+            self.locs.push((self.lines.len(), loc));
+        }
         self.lines.push(line);
         if self.scroll > 0 {
             // Keep the view anchored while the user is reading back.
             self.scroll += 1;
         }
         if self.lines.len() > MAX_LINES {
-            self.lines.drain(..MAX_LINES / 10);
+            let n = MAX_LINES / 10;
+            self.lines.drain(..n);
+            let gone = self.locs.iter().take_while(|(i, _)| *i < n).count();
+            self.locs.drain(..gone);
+            for (i, _) in &mut self.locs {
+                *i -= n;
+            }
+            self.cursor = self.cursor.and_then(|c| c.checked_sub(gone));
         }
         self.scroll = self.scroll.min(self.max_scroll());
+    }
+
+    /// The location picked with n / N.
+    pub fn selected_loc(&self) -> Option<&(usize, Loc)> {
+        self.locs.get(self.cursor?)
+    }
+
+    /// Picks the next (or previous) location, wrapping around, and scrolls it into the
+    /// middle of the pane. False when there are none.
+    pub fn step_loc(&mut self, forward: bool) -> bool {
+        let n = self.locs.len();
+        if n == 0 {
+            return false;
+        }
+        let c = match (self.cursor, forward) {
+            (None, true) => 0,
+            (None, false) => n - 1,
+            (Some(c), true) => (c + 1) % n,
+            (Some(c), false) => (c + n - 1) % n,
+        };
+        self.cursor = Some(c);
+        let line = self.locs[c].0;
+        let end = (line + self.height.div_ceil(2)).clamp(self.height.min(self.lines.len()), self.lines.len());
+        self.scroll = self.lines.len() - end;
+        true
     }
 
     /// Furthest scroll that still fills the pane: the first line at the top.
