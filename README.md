@@ -1,0 +1,60 @@
+# Mainframe
+
+A terminal control room: browse files, edit, build, run, install and git — one key each.
+
+```
+cargo install --path .        # or: run mainframe, press i, pick the release build
+mainframe [DIR]
+```
+
+The file browser fills the screen; an output pane opens underneath when something runs.
+Press `?` inside for all keys.
+
+## Keys
+
+| key | does |
+|---|---|
+| `j k` / arrows, `h l` | move, parent, enter |
+| `Enter` | enter dir / edit text file / run executable |
+| `/` · `c` · `~` · `.` | filter · go to path · home · toggle hidden |
+| `e` | edit in nano (configurable) |
+| `o` / `O` | open file / whole project in VS Code |
+| `r` / `R` | run in output pane / in the full terminal (for interactive programs) |
+| `b` / `B` / `t` | build / release build / test |
+| `i` | install picker: every executable in the project with profile, target, arch, age, install state |
+| `g` | git menu: status, diff, log, stage, commit, push/pull, branches, stash, `gh repo create` |
+| `:` / `!` | run a shell command / open your shell here |
+| `x` | kill the running task |
+| `a A m d` | new file, new dir, rename/move, trash |
+| `y p P` | yank, paste copy, paste move |
+| `v w z Tab + -` | preview, output pane, zoom output, focus output, resize |
+| `,` | edit config (custom key-bound commands live there) |
+
+"Run" knows Cargo (incl. `src/bin/*.rs` and `examples/*.rs`), Go, npm, Make, and single files
+(`.rs .c .cpp .py .sh .js .go …`, or anything executable).
+
+Background tasks have no terminal, so anything asking for a password fails fast instead of hanging.
+Use `R`, `!` or an `interactive = true` custom action for those.
+
+## Config
+
+`~/.config/mainframe/config.toml`. Press `,` to create and open it. It has editor, VS Code
+command, install dir, per-extension runners and custom actions:
+
+```toml
+[[actions]]
+key = "F5"
+name = "clippy"
+cmd = "cargo clippy --all-targets"
+```
+
+## cd on exit (fish)
+
+```fish
+function mf
+    set -l f (mktemp)
+    MAINFRAME_CWD_FILE=$f mainframe $argv
+    and cd (cat $f)
+    rm -f $f
+end
+```
