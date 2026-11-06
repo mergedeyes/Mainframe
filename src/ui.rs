@@ -313,7 +313,7 @@ fn spinner(task: &Task) -> &'static str {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     match &app.mode {
-        Mode::Prompt { kind, input, completer } => {
+        Mode::Prompt { kind, input, completer, .. } => {
             let label = format!(" {}: ", kind.label());
             let label_w = label.chars().count() as u16;
             let x = area.x + label_w + input.col() as u16;

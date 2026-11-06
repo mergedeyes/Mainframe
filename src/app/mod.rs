@@ -28,6 +28,7 @@ use crate::{
     config::{self, Config},
     form::Form,
     git::{self, GIT, GitInfo},
+    history::History,
     line::{Edit, LineEdit},
     project::{self, Op, Plan, Project, quote},
     watch,
@@ -36,7 +37,13 @@ use crate::{
 pub enum Mode {
     Normal,
     Filter(LineEdit),
-    Prompt { kind: PromptKind, input: LineEdit, completer: Option<Completer> },
+    Prompt {
+        kind: PromptKind,
+        input: LineEdit,
+        completer: Option<Completer>,
+        /// Walking the `:` history: the entry shown and what was typed before.
+        browsing: Option<(Option<usize>, String)>,
+    },
     Confirm { msg: String, action: Confirmed },
     Help,
     GitMenu,
@@ -144,6 +151,7 @@ pub struct App {
     pub quit: bool,
     /// zoxide is installed and enabled in the config.
     zoxide: bool,
+    history: History,
 }
 
 impl App {
@@ -178,6 +186,7 @@ impl App {
             pending: None,
             quit: false,
             zoxide: false,
+            history: History::load(),
         };
         app.zoxide = app.config.zoxide && project::which("zoxide").is_some();
         app.browser.select_first();

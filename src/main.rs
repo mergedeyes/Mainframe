@@ -6,6 +6,7 @@ mod config;
 mod desktop;
 mod form;
 mod git;
+mod history;
 mod install;
 mod line;
 mod locate;

@@ -30,16 +30,32 @@ impl App {
         if let Some(c) = completer.as_mut().filter(|_| initial.is_empty()) {
             c.update(initial, false);
         }
-        self.mode = Mode::Prompt { kind, input: LineEdit::new(initial), completer };
+        self.mode = Mode::Prompt { kind, input: LineEdit::new(initial), completer, browsing: None };
     }
 
     pub(super) fn key_prompt(&mut self, key: KeyEvent) {
-        let Mode::Prompt { kind, input, completer } = &mut self.mode else { return };
+        let Mode::Prompt { kind, input, completer, browsing } = &mut self.mode else { return };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let has_items = completer.as_ref().is_some_and(|c| !c.items.is_empty());
         match key.code {
             KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Char('c') if ctrl => self.mode = Mode::Normal,
+            // In `:` the arrows walk the history, narrowed to what was typed before.
+            KeyCode::Up | KeyCode::Down if matches!(kind, PromptKind::Command) => {
+                let (pos, prefix) = browsing.take().unwrap_or_else(|| (None, input.text.clone()));
+                let next = match key.code {
+                    KeyCode::Up => self.history.older(&prefix, pos).or(pos),
+                    _ => pos.and_then(|p| self.history.newer(&prefix, p)),
+                };
+                *input = LineEdit::new(next.map_or(prefix.as_str(), |i| self.history.get(i)));
+                if let Some(c) = completer.as_mut() {
+                    c.items.clear();
+                    c.selected = None;
+                }
+                if next.is_some() {
+                    *browsing = Some((next, prefix));
+                }
+            }
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up
                 if completer.is_some() && (has_items || matches!(key.code, KeyCode::Tab | KeyCode::BackTab)) =>
             {
@@ -59,7 +75,11 @@ impl App {
                 }
             }
             _ => {
-                if input.key(key) != Edit::Ignored
+                let edit = input.key(key);
+                if edit == Edit::Changed {
+                    *browsing = None;
+                }
+                if edit != Edit::Ignored
                     && let Some(c) = completer.as_mut()
                 {
                     c.update(input.head(), false);
@@ -76,7 +96,10 @@ impl App {
     pub(super) fn submit_prompt(&mut self, kind: PromptKind, input: String) {
         let cwd = self.browser.cwd.clone();
         match kind {
-            PromptKind::Command => self.start_task(input.clone(), Plan { cmd: input, cwd }),
+            PromptKind::Command => {
+                self.history.add(&input);
+                self.start_task(input.clone(), Plan { cmd: input, cwd });
+            }
             PromptKind::Commit { all } => {
                 let add = if all { format!("{GIT} add -A && ") } else { String::new() };
                 let cmd = format!("{add}{GIT} commit -m {}", quote_str(&input));

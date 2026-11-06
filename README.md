@@ -36,6 +36,9 @@ Press `?` inside for all keys.
 | `v w z Tab + -` | preview, output pane, zoom output, focus output, resize |
 | `,` | edit config (custom key-bound commands live there) |
 
+In `:`, ↑↓ walk the command history (kept in `~/.local/state/mainframe/history`), narrowed to
+what you typed before pressing ↑.
+
 Every prompt completes with Tab (Shift-Tab / ↑↓ cycle): paths in go-to, new, rename and gh's
 source folder; programs from `$PATH` and paths in `:` commands; zoxide matches for keywords in
 `c`; branch names when switching.
