@@ -22,6 +22,7 @@ Press `?` inside for all keys.
 | `o` / `O` | open file / whole project in VS Code |
 | `r` / `R` | run in output pane / in the full terminal (for interactive programs) |
 | `b` / `B` / `t` | build / release build / test |
+| `T` | task picker: the build tool's usual commands, cargo bins and examples, `go run ./cmd/…`, Python entry points, package.json scripts, make targets and just recipes — type to filter, `Enter` runs, `^R` runs in the full terminal |
 | `i` | install picker: every executable in the project with profile, target, arch, age, install state; also updates the project's `.desktop` entry (shows a diff first, `d` to review it alone) |
 | `g` | git menu: status, diff, log, stage, commit, push/pull, branches, stash, `gh repo create` |
 | `:` / `!` | run a shell command / open your shell here |
@@ -37,7 +38,8 @@ Every prompt completes with Tab (Shift-Tab / ↑↓ cycle): paths in go-to, new,
 source folder; programs from `$PATH` and paths in `:` commands; zoxide matches for keywords in
 `c`; branch names when switching.
 
-"Run" knows Cargo (incl. `src/bin/*.rs` and `examples/*.rs`), Go, npm, Make, and single files
+"Run" knows Cargo (incl. `src/bin/*.rs` and `examples/*.rs`), Go, npm, Python (uv / poetry), Zig, CMake,
+Meson, Make, just, and single files
 (`.rs .c .cpp .py .sh .js .go …`, or anything executable).
 
 Background tasks have no terminal, so anything asking for a password fails fast instead of hanging.

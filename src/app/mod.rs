@@ -5,6 +5,7 @@ mod files;
 mod git_menu;
 mod installer;
 mod prompt;
+mod task_picker;
 mod tasks;
 
 use std::{
@@ -18,6 +19,7 @@ use std::{
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub use installer::{AfterReview, DesktopReview, InstallPicker};
+pub use task_picker::TaskPicker;
 pub use tasks::Tab;
 
 use crate::{
@@ -38,6 +40,7 @@ pub enum Mode {
     Help,
     GitMenu,
     Install(InstallPicker),
+    Tasks(TaskPicker),
     Form(Form),
     DesktopReview(DesktopReview),
 }
@@ -269,6 +272,7 @@ impl App {
             Mode::Confirm { .. } => self.key_confirm(key),
             Mode::GitMenu => self.key_git(key),
             Mode::Install(_) => self.key_install(key),
+            Mode::Tasks(_) => self.key_task_picker(key),
             Mode::Form(_) => self.key_form(key),
             Mode::DesktopReview(_) => self.key_desktop_review(key),
             Mode::Normal => self.key_normal(key),
@@ -350,6 +354,7 @@ impl App {
             KeyCode::Char('b') => self.run_op(Op::Build, false),
             KeyCode::Char('B') => self.run_op(Op::Release, false),
             KeyCode::Char('t') => self.run_op(Op::Test, false),
+            KeyCode::Char('T') => self.open_task_picker(),
             KeyCode::Char('i') => self.open_install_picker(),
             KeyCode::Char('g') => {
                 self.await_git();

@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{AfterReview, App, DesktopReview, Focus, InstallPicker, Level, Mode},
+    app::{AfterReview, App, DesktopReview, Focus, InstallPicker, Level, Mode, TaskPicker},
     complete::Completer,
     form::{Form, FormKind},
     browser::{Preview, human_size},
@@ -59,6 +59,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Help => draw_help(f, f.area()),
         Mode::GitMenu => draw_git_menu(f, app.git.as_ref(), f.area()),
         Mode::Install(picker) => draw_install(f, picker, f.area()),
+        Mode::Tasks(picker) => draw_task_picker(f, picker, f.area()),
         Mode::Form(form) => draw_form(f, form, f.area()),
         Mode::DesktopReview(review) => draw_desktop_review(f, review, f.area()),
         _ => {}
@@ -447,6 +448,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("R", "run in full terminal"),
             ("b / B", "build / release build"),
             ("t", "test"),
+            ("T", "all project tasks (scripts, targets…)"),
             ("i", "install picker"),
             ("g", "git menu"),
             (":", "shell command"),
@@ -559,6 +561,40 @@ fn draw_git_menu(f: &mut Frame, info: Option<&git::GitInfo>, area: Rect) {
     let [l, r] = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(body);
     f.render_widget(Paragraph::new(left), l);
     f.render_widget(Paragraph::new(right), r);
+}
+
+fn draw_task_picker(f: &mut Frame, picker: &mut TaskPicker, area: Rect) {
+    let rect = popup(area, 100, picker.items.len() as u16 + 4);
+    f.render_widget(Clear, rect);
+    let block = pane(Line::from(format!(" tasks · {} ", picker.title).bold()), true)
+        .title_bottom(Line::from(" type to filter · Enter run · ^R in terminal · Esc close ").right_aligned().fg(DIM));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+
+    f.render_widget(
+        Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(picker.filter.text.clone())]),
+        input,
+    );
+    f.set_cursor_position(Position::new((input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)), input.y));
+
+    let name_w = picker.items.iter().map(|t| t.name.chars().count()).max().unwrap_or(0).min(28);
+    let items: Vec<ListItem> = picker
+        .visible
+        .iter()
+        .map(|&i| {
+            let t = &picker.items[i];
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:<8}", t.group), Style::new().fg(Color::Yellow)),
+                Span::styled(format!("{:<name_w$}  ", truncate(&t.name, name_w)), Style::new().bold()),
+                Span::styled(t.cmd.clone(), Style::new().fg(DIM)),
+            ]))
+        })
+        .collect();
+    let list = List::new(items)
+        .highlight_symbol("▌ ")
+        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(list, list_area, &mut picker.state);
 }
 
 fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {

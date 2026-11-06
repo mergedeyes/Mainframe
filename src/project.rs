@@ -5,14 +5,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{browser::Entry, config::Config};
+use crate::{browser::Entry, config::Config, targets};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Cargo,
     Go,
     Npm,
+    Python,
+    Zig,
+    CMake,
+    Meson,
     Make,
+    Just,
 }
 
 impl Kind {
@@ -21,7 +26,12 @@ impl Kind {
             Kind::Cargo => "cargo",
             Kind::Go => "go",
             Kind::Npm => "npm",
+            Kind::Python => "python",
+            Kind::Zig => "zig",
+            Kind::CMake => "cmake",
+            Kind::Meson => "meson",
             Kind::Make => "make",
+            Kind::Just => "just",
         }
     }
 }
@@ -59,6 +69,19 @@ pub struct Plan {
     pub cwd: PathBuf,
 }
 
+/// Files that make a directory a project, most specific first.
+const MARKERS: &[(Kind, &[&str])] = &[
+    (Kind::Cargo, &["Cargo.toml"]),
+    (Kind::Go, &["go.mod"]),
+    (Kind::Npm, &["package.json"]),
+    (Kind::Python, &["pyproject.toml", "setup.py"]),
+    (Kind::Zig, &["build.zig"]),
+    (Kind::CMake, &["CMakeLists.txt"]),
+    (Kind::Meson, &["meson.build"]),
+    (Kind::Make, &["Makefile", "makefile", "GNUmakefile"]),
+    (Kind::Just, &["justfile", "Justfile", ".justfile"]),
+];
+
 /// Walks up from `start` looking for a project marker. Stops at $HOME so a stray
 /// Makefile in your home dir doesn't hijack everything below it.
 pub fn detect(start: &Path) -> Option<Project> {
@@ -68,20 +91,11 @@ pub fn detect(start: &Path) -> Option<Project> {
         if d == home {
             break;
         }
-        let kind = if d.join("Cargo.toml").is_file() {
-            Some(Kind::Cargo)
-        } else if d.join("go.mod").is_file() {
-            Some(Kind::Go)
-        } else if d.join("package.json").is_file() {
-            Some(Kind::Npm)
-        } else if d.join("Makefile").is_file() || d.join("makefile").is_file() {
-            Some(Kind::Make)
-        } else {
-            None
-        };
+        let kind = MARKERS.iter().find(|(_, files)| files.iter().any(|f| d.join(f).is_file())).map(|&(k, _)| k);
         if let Some(kind) = kind {
             let name = match kind {
                 Kind::Cargo => cargo_name(d),
+                Kind::Python => targets::python_name(d),
                 _ => None,
             }
             .or_else(|| d.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -119,6 +133,9 @@ pub fn plan(op: Op, target: Option<&Entry>, cwd: &Path, cfg: &Config) -> Result<
             None => format!("no project here to {}", op.verb()),
         });
     };
+    if p.kind == Kind::Python {
+        return targets::python_plan(op, &p.root).map(|cmd| Plan { cmd, cwd: p.root.clone() });
+    }
     let cmd = match (p.kind, op) {
         (Kind::Cargo, Op::Run) => "cargo run",
         (Kind::Cargo, Op::Build) => "cargo build",
@@ -133,6 +150,24 @@ pub fn plan(op: Op, target: Option<&Entry>, cwd: &Path, cfg: &Config) -> Result<
         (Kind::Make, Op::Run) => "make run",
         (Kind::Make, Op::Build | Op::Release) => "make",
         (Kind::Make, Op::Test) => "make test",
+        (Kind::Zig, Op::Run) => "zig build run",
+        (Kind::Zig, Op::Build) => "zig build",
+        (Kind::Zig, Op::Release) => "zig build -Doptimize=ReleaseFast",
+        (Kind::Zig, Op::Test) => "zig build test",
+        (Kind::CMake, Op::Run) => return Err("cmake doesn't say what to run — T lists its tasks".into()),
+        (Kind::CMake, Op::Build) => "cmake -S . -B build && cmake --build build",
+        (Kind::CMake, Op::Release) => "cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release",
+        (Kind::CMake, Op::Test) => "ctest --test-dir build --output-on-failure",
+        (Kind::Meson, Op::Run) => return Err("meson doesn't say what to run — T lists its tasks".into()),
+        (Kind::Meson, Op::Build) => "{ [ -d build ] || meson setup build; } && meson compile -C build",
+        (Kind::Meson, Op::Release) => {
+            "{ [ -d build-release ] || meson setup build-release --buildtype=release; } && meson compile -C build-release"
+        }
+        (Kind::Meson, Op::Test) => "meson test -C build",
+        (Kind::Just, Op::Run) => "just",
+        (Kind::Just, Op::Build | Op::Release) => "just build",
+        (Kind::Just, Op::Test) => "just test",
+        (Kind::Python, _) => unreachable!(),
     };
     Ok(Plan { cmd: cmd.into(), cwd: p.root })
 }
