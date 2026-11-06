@@ -8,6 +8,7 @@ mainframe [DIR]
 ```
 
 The file browser fills the screen; an output pane opens underneath when something runs.
+Starting a task while another runs opens it in a new output tab, so a dev server can keep going while you build.
 Press `?` inside for all keys.
 
 ## Keys
@@ -24,7 +25,8 @@ Press `?` inside for all keys.
 | `i` | install picker: every executable in the project with profile, target, arch, age, install state; also updates the project's `.desktop` entry (shows a diff first, `d` to review it alone) |
 | `g` | git menu: status, diff, log, stage, commit, push/pull, branches, stash, `gh repo create` |
 | `:` / `!` | run a shell command / open your shell here |
-| `x` | kill the running task |
+| `x` | kill the shown task, or close its tab once it's done |
+| `[` `]` | previous / next output tab |
 | `a A m d` | new file, new dir, rename/move, trash |
 | `y p P` | yank, paste copy, paste move |
 | `v w z Tab + -` | preview, output pane, zoom output, focus output, resize |

@@ -109,11 +109,6 @@ pub struct Output {
 }
 
 impl Output {
-    pub fn clear(&mut self) {
-        self.lines.clear();
-        self.scroll = 0;
-    }
-
     pub fn push(&mut self, line: Line<'static>) {
         self.lines.push(line);
         if self.scroll > 0 {

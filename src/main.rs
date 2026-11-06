@@ -64,8 +64,8 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         app.tick();
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // Redraw faster while a task streams output or the spinner turns.
-        let timeout = if app.task_running() { 50 } else { 500 };
+        // Redraw faster while a task streams output, the spinner turns or git status is due.
+        let timeout = if app.busy() { 50 } else { 500 };
         if event::poll(Duration::from_millis(timeout))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
@@ -78,9 +78,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
             app.after_foreground(&fg, output);
         }
     }
-    if let Some(task) = &mut app.task {
-        task.kill();
-    }
+    app.kill_all();
     Ok(())
 }
 

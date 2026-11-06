@@ -15,6 +15,7 @@ use crate::{
     desktop::{self, Change, Status as DesktopStatus},
     git,
     install::{self, Installed},
+    task::Task,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -73,19 +74,23 @@ fn pane(title: Line<'static>, focused: bool) -> Block<'static> {
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     // Right side first: what's running, so the path can be truncated to fit.
-    let right = if let Some(t) = &app.task {
+    let tab = app.tab();
+    let mut right = if let Some(t) = &tab.task {
         let el = t.started.elapsed();
-        let frame = SPINNER[(el.as_millis() / 80) as usize % SPINNER.len()];
         Line::from(Span::styled(
-            format!(" {frame} {} {:.1}s ", truncate(&t.label, 40), el.as_secs_f32()),
+            format!(" {} {} {:.1}s ", spinner(t), truncate(&t.label, 40), el.as_secs_f32()),
             Style::new().fg(ACCENT),
         ))
-    } else if let Some(l) = &app.last_run {
+    } else if let Some(l) = &tab.last_run {
         let (sym, col) = if l.ok { ("✔", Color::Green) } else { ("✘", Color::Red) };
         Line::from(Span::styled(format!(" {sym} {} ", truncate(&l.label, 40)), Style::new().fg(col)))
     } else {
         Line::default()
     };
+    let others = app.tabs.iter().enumerate().filter(|&(i, t)| i != app.tab && t.running()).count();
+    if others > 0 {
+        right.push_span(Span::styled(format!("+{others} running "), Style::new().fg(DIM)));
+    }
 
     let mut badges = Vec::new();
     if let Some(p) = &app.project {
@@ -232,31 +237,56 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     let height = area.height.saturating_sub(2) as usize;
-    app.output.height = height;
-    // The pane may have shrunk (resize, zoom off) since the last scroll.
-    app.output.scroll = app.output.scroll.min(app.output.max_scroll());
+    let focused = app.focus == Focus::Output;
 
+    // One tab shows just its state; several turn the title into a tab bar.
     let mut title = vec![Span::styled(" output ", Style::new().bold())];
-    if let Some(t) = &app.task {
-        let frame = SPINNER[(t.started.elapsed().as_millis() / 80) as usize % SPINNER.len()];
-        title.push(Span::styled(format!("{frame} running {:.1}s ", t.started.elapsed().as_secs_f32()), Style::new().fg(ACCENT)));
-    } else if let Some(l) = &app.last_run {
+    let tab = app.tab();
+    if app.tabs.len() > 1 {
+        title.clear();
+        for (i, t) in app.tabs.iter().enumerate() {
+            let state = match (&t.task, &t.last_run) {
+                (Some(task), _) => Span::styled(spinner(task), Style::new().fg(ACCENT)),
+                (None, Some(l)) if l.ok => Span::styled("✔", Style::new().fg(Color::Green)),
+                (None, Some(_)) => Span::styled("✘", Style::new().fg(Color::Red)),
+                (None, None) => Span::raw("·"),
+            };
+            let style = if i == app.tab { Style::new().bold().reversed() } else { Style::new().fg(DIM) };
+            title.extend([Span::raw(" "), state, Span::styled(format!(" {} {} ", i + 1, truncate(&t.label, 20)), style)]);
+        }
+        title.push(Span::raw(" "));
+    }
+    if let Some(t) = &tab.task {
+        title.push(Span::styled(
+            format!("{} running {:.1}s ", spinner(t), t.started.elapsed().as_secs_f32()),
+            Style::new().fg(ACCENT),
+        ));
+    } else if let Some(l) = &tab.last_run {
         let col = if l.ok { Color::Green } else { Color::Red };
         title.push(Span::styled(format!("{} {} ", if l.ok { "✔" } else { "✘" }, l.detail), Style::new().fg(col)));
     }
-    let mut block = pane(Line::from(title), app.focus == Focus::Output);
-    if app.output.scroll > 0 {
+
+    let out = &mut app.tabs[app.tab].output;
+    out.height = height;
+    // The pane may have shrunk (resize, zoom off) since the last scroll.
+    out.scroll = out.scroll.min(out.max_scroll());
+
+    let mut block = pane(Line::from(title), focused);
+    if out.scroll > 0 {
         block = block.title_bottom(
-            Line::from(format!(" ↑ {} lines up · End to follow ", app.output.scroll)).right_aligned().fg(Color::Yellow),
+            Line::from(format!(" ↑ {} lines up · End to follow ", out.scroll)).right_aligned().fg(Color::Yellow),
         );
-    } else if app.focus == Focus::Output {
-        block = block.title_bottom(Line::from(" ↑↓ PgUp PgDn scroll · z zoom · Tab back ").right_aligned().fg(DIM));
+    } else if focused {
+        block = block.title_bottom(Line::from(" ↑↓ PgUp PgDn scroll · [ ] tabs · z zoom · Tab back ").right_aligned().fg(DIM));
     }
 
-    let lines = &app.output.lines;
-    let end = lines.len().saturating_sub(app.output.scroll);
+    let end = out.lines.len().saturating_sub(out.scroll);
     let start = end.saturating_sub(height);
-    f.render_widget(Paragraph::new(lines[start..end].to_vec()).block(block), area);
+    f.render_widget(Paragraph::new(out.lines[start..end].to_vec()).block(block), area);
+}
+
+fn spinner(task: &Task) -> &'static str {
+    SPINNER[(task.started.elapsed().as_millis() / 80) as usize % SPINNER.len()]
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -406,7 +436,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("g", "git menu"),
             (":", "shell command"),
             ("!", "open shell here"),
-            ("x  ^c", "kill running task"),
+            ("x  ^c", "kill task · x closes a done tab"),
             (",", "edit config"),
         ],
     ),
@@ -426,6 +456,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("v", "toggle preview"),
             ("w", "toggle output pane"),
             ("z", "zoom output"),
+            ("[ / ]", "previous / next output tab"),
             ("Tab", "focus output (scroll)"),
             ("+ / -", "resize output"),
             ("q", "quit"),
