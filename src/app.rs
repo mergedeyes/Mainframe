@@ -143,7 +143,6 @@ pub struct App {
 
     // Written by the UI so paging knows how tall things are.
     pub browser_height: u16,
-    pub output_height: u16,
 
     pub pending: Option<Foreground>,
     pub quit: bool,
@@ -172,7 +171,6 @@ impl App {
             project: None,
             git: None,
             browser_height: 10,
-            output_height: 10,
             pending: None,
             quit: false,
         };
@@ -390,13 +388,13 @@ impl App {
 
     /// Scroll keys while the output pane has focus. Returns false to fall through.
     fn key_output(&mut self, key: KeyEvent) -> bool {
-        let page = self.output_height.max(1) as isize;
+        let page = self.output.height.max(1) as isize;
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => self.output.scroll_by(-1),
             KeyCode::Char('k') | KeyCode::Up => self.output.scroll_by(1),
             KeyCode::PageDown => self.output.scroll_by(-page),
             KeyCode::PageUp => self.output.scroll_by(page),
-            KeyCode::Home => self.output.scroll = self.output.lines.len(),
+            KeyCode::Home => self.output.scroll_to_top(),
             KeyCode::End => self.output.scroll = 0,
             KeyCode::Esc => self.focus = Focus::Browser,
             _ => return false,

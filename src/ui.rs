@@ -228,6 +228,11 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
+    let height = area.height.saturating_sub(2) as usize;
+    app.output.height = height;
+    // The pane may have shrunk (resize, zoom off) since the last scroll.
+    app.output.scroll = app.output.scroll.min(app.output.max_scroll());
+
     let mut title = vec![Span::styled(" output ", Style::new().bold())];
     if let Some(t) = &app.task {
         let frame = SPINNER[(t.started.elapsed().as_millis() / 80) as usize % SPINNER.len()];
@@ -245,8 +250,6 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
         block = block.title_bottom(Line::from(" ↑↓ PgUp PgDn scroll · z zoom · Tab back ").right_aligned().fg(DIM));
     }
 
-    let height = area.height.saturating_sub(2) as usize;
-    app.output_height = height as u16;
     let lines = &app.output.lines;
     let end = lines.len().saturating_sub(app.output.scroll);
     let start = end.saturating_sub(height);

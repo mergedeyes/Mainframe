@@ -104,6 +104,8 @@ pub struct Output {
     pub lines: Vec<Line<'static>>,
     /// Lines scrolled up from the bottom; 0 means following new output.
     pub scroll: usize,
+    /// Visible rows, set by the UI each frame.
+    pub height: usize,
 }
 
 impl Output {
@@ -121,10 +123,19 @@ impl Output {
         if self.lines.len() > MAX_LINES {
             self.lines.drain(..MAX_LINES / 10);
         }
-        self.scroll = self.scroll.min(self.lines.len());
+        self.scroll = self.scroll.min(self.max_scroll());
+    }
+
+    /// Furthest scroll that still fills the pane: the first line at the top.
+    pub fn max_scroll(&self) -> usize {
+        self.lines.len().saturating_sub(self.height)
     }
 
     pub fn scroll_by(&mut self, delta: isize) {
-        self.scroll = (self.scroll as isize + delta).clamp(0, self.lines.len() as isize) as usize;
+        self.scroll = (self.scroll as isize + delta).clamp(0, self.max_scroll() as isize) as usize;
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.scroll = self.max_scroll();
     }
 }
