@@ -4,7 +4,7 @@ use std::{
     collections::BTreeSet,
     env, fs,
     os::unix::fs::PermissionsExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -64,13 +64,15 @@ impl Completer {
             Kind::Dir => (0, paths(input, true, false)),
             Kind::List => (0, words(&self.words, input)),
             Kind::Cd => {
+                // Local matches first, then zoxide's (unless it's clearly a path).
+                let mut items = paths(input, false, false);
                 let looks_like_path = input.starts_with(['/', '~', '.']) || input.contains('/');
-                let found = paths(input, false, false);
-                if self.zoxide && !input.trim().is_empty() && !looks_like_path && (found.is_empty() || input.contains(' ')) {
-                    (0, zoxide(input))
-                } else {
-                    (0, found)
+                if self.zoxide && !input.trim().is_empty() && !looks_like_path {
+                    let cwd = env::current_dir().unwrap_or_default();
+                    let local: Vec<PathBuf> = items.iter().map(|i| cwd.join(i.insert.trim_end_matches('/'))).collect();
+                    items.extend(zoxide(input, &cwd).into_iter().filter(|z| !local.iter().any(|l| l == Path::new(&z.insert))));
                 }
+                (0, items)
             }
             Kind::Shell => {
                 let start = shell_token_start(input);
@@ -117,7 +119,10 @@ impl Completer {
             return;
         }
         let lcp = common_prefix(self.items.iter().map(|i| i.insert.as_str()));
-        if lcp.chars().count() > token_len {
+        // Only extend what was typed: zoxide's absolute paths share "/home/…",
+        // which must not replace a keyword like "Term".
+        let extends = lcp.to_lowercase().starts_with(&input[self.start..].to_lowercase());
+        if extends && lcp.chars().count() > token_len {
             input.truncate(self.start);
             input.push_str(&lcp);
             self.update(input, false);
@@ -146,7 +151,8 @@ fn paths(token: &str, dirs_only: bool, shell: bool) -> Vec<Item> {
     let dir = if dir_part.is_empty() { PathBuf::from(".") } else { expand_tilde(dir_part) };
     let Ok(rd) = fs::read_dir(&dir) else { return Vec::new() };
 
-    let lower = prefix.to_lowercase();
+    let fold = smart_case(prefix);
+    let needle = fold(prefix);
     let show_hidden = prefix.starts_with('.');
     let (mut starts, mut contains) = (Vec::new(), Vec::new());
     for de in rd.flatten() {
@@ -158,10 +164,10 @@ fn paths(token: &str, dirs_only: bool, shell: bool) -> Vec<Item> {
         if dirs_only && !is_dir {
             continue;
         }
-        let l = name.to_lowercase();
-        if l.starts_with(&lower) {
+        let hay = fold(&name);
+        if hay.starts_with(&needle) {
             starts.push((name, is_dir));
-        } else if !lower.is_empty() && l.contains(&lower) {
+        } else if !needle.is_empty() && hay.contains(&needle) {
             contains.push((name, is_dir));
         }
     }
@@ -182,10 +188,11 @@ fn paths(token: &str, dirs_only: bool, shell: bool) -> Vec<Item> {
 }
 
 fn words(list: &[String], input: &str) -> Vec<Item> {
-    let lower = input.to_lowercase();
-    let mut starts: Vec<&String> = list.iter().filter(|w| w.to_lowercase().starts_with(&lower)).collect();
+    let fold = smart_case(input);
+    let needle = fold(input);
+    let mut starts: Vec<&String> = list.iter().filter(|w| fold(w).starts_with(&needle)).collect();
     if starts.is_empty() {
-        starts = list.iter().filter(|w| w.to_lowercase().contains(&lower)).collect();
+        starts = list.iter().filter(|w| fold(w).contains(&needle)).collect();
     }
     starts
         .into_iter()
@@ -202,9 +209,16 @@ fn programs(list: &[String], prefix: &str) -> Vec<Item> {
         .collect()
 }
 
-fn zoxide(input: &str) -> Vec<Item> {
+/// Smart case: case-insensitive unless the pattern contains an uppercase letter.
+fn smart_case(pattern: &str) -> fn(&str) -> String {
+    if pattern.chars().any(char::is_uppercase) { str::to_string } else { str::to_lowercase }
+}
+
+fn zoxide(input: &str, exclude: &Path) -> Vec<Item> {
     let Ok(out) = Command::new("zoxide")
-        .args(["query", "--list", "--"])
+        .args(["query", "--list", "--exclude"])
+        .arg(exclude)
+        .arg("--")
         .args(input.split_whitespace())
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -316,6 +330,13 @@ mod tests {
         assert!(is_command_position(""));
         assert!(is_command_position("ls | "));
         assert!(!is_command_position("ls "));
+    }
+
+    #[test]
+    fn smart_case_only_when_uppercase_typed() {
+        assert_eq!(smart_case("term")("Terminal"), "terminal");
+        assert_eq!(smart_case("Term")("target"), "target");
+        assert!(!smart_case("T")("target").starts_with("T"));
     }
 
     #[test]
