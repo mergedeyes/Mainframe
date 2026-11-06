@@ -896,17 +896,17 @@ impl App {
     }
 
     fn install_binary(&mut self, c: &Candidate, root: &Path) {
-        let dir = self.config.install_dir();
-        let dest = dir.join(&c.name);
+        let dest = &c.dest;
+        let dir = dest.parent().unwrap_or(Path::new("/"));
         let dir_s = dir.to_string_lossy();
         let cmd = format!(
             "install -Dm755 -- {src} {dst} && echo 'installed → {pretty}' && \
              case \":$PATH:\" in *:{d}:*) ;; *) echo 'note: {pretty_dir} is not on your PATH' ;; esac",
             src = quote(&c.path),
-            dst = quote(&dest),
-            pretty = config::pretty_path(&dest),
+            dst = quote(dest),
+            pretty = config::pretty_path(dest),
             d = quote_str(&dir_s),
-            pretty_dir = config::pretty_path(&dir),
+            pretty_dir = config::pretty_path(dir),
         );
         self.start_task(format!("install {}", c.name), Plan { cmd, cwd: root.to_path_buf() });
     }

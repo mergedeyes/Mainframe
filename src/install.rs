@@ -12,7 +12,10 @@ use std::{
 pub enum Installed {
     No,
     Same,
-    Differs,
+    /// This build is newer than the installed binary.
+    Newer,
+    /// The installed binary is newer than this build.
+    Older,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +35,11 @@ pub struct Candidate {
     /// Older than the newest source file in the project.
     pub stale: bool,
     pub installed: Installed,
+    /// Where `i` puts it: over the existing installed copy if there is one,
+    /// otherwise into the configured install dir.
+    pub dest: PathBuf,
+    /// A second installed copy in the install dir that `dest` shadows on $PATH.
+    pub shadowed: Option<PathBuf>,
 }
 
 const MAX_DEPTH: usize = 7;
@@ -141,9 +149,11 @@ fn describe(
         return None;
     };
 
-    let installed = installed_state(&path, size, &install_dir.join(&name));
+    let dest = installed_copy(&name, install_dir).unwrap_or_else(|| install_dir.join(&name));
+    let shadowed = Some(install_dir.join(&name)).filter(|p| p.is_file() && *p != dest);
+    let installed = installed_state(&path, size, modified, &dest);
     let stale = rel.starts_with("target/") && newest_src > modified;
-    Some(Candidate { path, name, rel, kind, triple, arch, size, modified, stale, installed })
+    Some(Candidate { path, name, rel, kind, triple, arch, size, modified, stale, installed, dest, shadowed })
 }
 
 /// `target/release/foo` → ("release", None)
@@ -174,14 +184,23 @@ fn cargo_profile(rel: &Path) -> Option<(String, Option<String>)> {
     Some((kind, triple))
 }
 
-fn installed_state(src: &Path, size: u64, dest: &Path) -> Installed {
+/// The copy your shell actually runs (first on $PATH), as long as it lives under
+/// $HOME so a project binary called `test` never matches /usr/bin/test.
+/// Falls back to a copy in the install dir that isn't on PATH.
+fn installed_copy(name: &str, install_dir: &Path) -> Option<PathBuf> {
+    crate::project::which(name)
+        .filter(|p| p.starts_with(crate::config::home()))
+        .or_else(|| Some(install_dir.join(name)).filter(|p| p.is_file()))
+}
+
+fn installed_state(src: &Path, size: u64, modified: SystemTime, dest: &Path) -> Installed {
     let Ok(meta) = fs::metadata(dest) else { return Installed::No };
-    if meta.len() != size {
-        return Installed::Differs;
+    if meta.len() == size && matches!((fs::read(src), fs::read(dest)), (Ok(a), Ok(b)) if a == b) {
+        return Installed::Same;
     }
-    match (fs::read(src), fs::read(dest)) {
-        (Ok(a), Ok(b)) if a == b => Installed::Same,
-        _ => Installed::Differs,
+    match meta.modified() {
+        Ok(installed) if installed > modified => Installed::Older,
+        _ => Installed::Newer,
     }
 }
 

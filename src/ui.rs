@@ -56,7 +56,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match &mut app.mode {
         Mode::Help => draw_help(f, f.area()),
         Mode::GitMenu => draw_git_menu(f, app.git.as_ref(), f.area()),
-        Mode::Install(picker) => draw_install(f, picker, &app.config.install_dir(), f.area()),
+        Mode::Install(picker) => draw_install(f, picker, f.area()),
         Mode::Form(form) => draw_form(f, form, f.area()),
         _ => {}
     }
@@ -512,7 +512,7 @@ fn draw_git_menu(f: &mut Frame, info: Option<&git::GitInfo>, area: Rect) {
     f.render_widget(Paragraph::new(right), r);
 }
 
-fn draw_install(f: &mut Frame, picker: &mut InstallPicker, install_dir: &std::path::Path, area: Rect) {
+fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
     let rect = popup(area, 120, picker.len() as u16 + 11);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(format!(" install from {} ", pretty_path(&picker.root)).bold()), true)
@@ -541,11 +541,12 @@ fn draw_install(f: &mut Frame, picker: &mut InstallPicker, install_dir: &std::pa
         let mut spans = vec![Span::raw(row(&c.name, &c.kind, &c.arch, &human_size(c.size), &install::age(c.modified))), Span::raw("  ")];
         match c.installed {
             Installed::Same => spans.push("✓ installed".green()),
-            Installed::Differs => spans.push("≠ older copy installed".yellow()),
+            Installed::Newer => spans.push("↑ newer than installed binary".yellow()),
+            Installed::Older => spans.push("↓ older than installed binary".fg(DIM)),
             Installed::No => {}
         }
         if c.stale {
-            spans.push("  ⚠ older than sources".fg(Color::LightRed));
+            spans.push("  ⚠ stale".fg(Color::LightRed));
         }
         items.push(ListItem::new(Line::from(spans)));
     }
@@ -563,9 +564,26 @@ fn draw_install(f: &mut Frame, picker: &mut InstallPicker, install_dir: &std::pa
                 Span::raw(c.triple.clone().unwrap_or_else(|| "host".into())),
                 Span::styled(format!("  ({})", c.arch), Style::new().fg(DIM)),
             ]),
-            Line::from(vec![label("installs"), Span::raw(pretty_path(&install_dir.join(&c.name)))]),
+            Line::from(vec![
+                label("installs"),
+                Span::raw(pretty_path(&c.dest)),
+                Span::styled(
+                    match c.installed {
+                        Installed::No => "",
+                        Installed::Same => "  (identical copy already there)",
+                        Installed::Newer => "  (replaces the older installed binary)",
+                        Installed::Older => "  (would replace a NEWER installed binary)",
+                    },
+                    Style::new().fg(if c.installed == Installed::Older { Color::LightRed } else { DIM }),
+                ),
+            ]),
             if c.stale {
                 Line::from("sources changed after this was built — b / B to rebuild first".fg(Color::LightRed))
+            } else if let Some(other) = &c.shadowed {
+                Line::from(
+                    format!("also installed at {} — never runs, {} comes first on PATH", pretty_path(other), pretty_path(&c.dest))
+                        .fg(Color::Yellow),
+                )
             } else {
                 Line::default()
             },
