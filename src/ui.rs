@@ -122,7 +122,7 @@ fn draw_browser(f: &mut Frame, app: &mut App, area: Rect) {
         format!(" {} ", b.cwd.file_name().map_or("/".into(), |n| n.to_string_lossy().into_owned())),
         Style::new().bold(),
     )];
-    if !b.filter.is_empty() || matches!(app.mode, Mode::Filter) {
+    if !b.filter.is_empty() || matches!(app.mode, Mode::Filter(_)) {
         title.push(Span::styled(format!("/{} ", b.filter), Style::new().fg(Color::Yellow)));
     }
     let count = format!(" {}/{} ", b.state.selected().map_or(0, |i| i + 1), b.visible.len());
@@ -264,9 +264,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         Mode::Prompt { kind, input, completer } => {
             let label = format!(" {}: ", kind.label());
             let label_w = label.chars().count() as u16;
-            let x = area.x + label_w + input.chars().count() as u16;
+            let x = area.x + label_w + input.col() as u16;
             f.render_widget(
-                Line::from(vec![Span::styled(label, Style::new().fg(ACCENT).bold()), Span::raw(input.clone())]),
+                Line::from(vec![Span::styled(label, Style::new().fg(ACCENT).bold()), Span::raw(input.text.clone())]),
                 area,
             );
             f.set_cursor_position(Position::new(x.min(area.right().saturating_sub(1)), area.y));
@@ -279,16 +279,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             f.render_widget(Line::from(format!(" {msg} ")).style(Style::new().bg(Color::Yellow).fg(Color::Black).bold()), area);
             return;
         }
-        Mode::Filter => {
+        Mode::Filter(edit) => {
             f.render_widget(
                 Line::from(vec![
                     Span::styled(" filter: ", Style::new().fg(ACCENT).bold()),
-                    Span::raw(app.browser.filter.clone()),
+                    Span::raw(edit.text.clone()),
                     Span::styled("   Enter keep · Esc clear", Style::new().fg(DIM)),
                 ]),
                 area,
             );
-            let x = area.x + 9 + app.browser.filter.chars().count() as u16;
+            let x = area.x + 9 + edit.col() as u16;
             f.set_cursor_position(Position::new(x.min(area.right().saturating_sub(1)), area.y));
             return;
         }
@@ -547,6 +547,10 @@ fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
             Installed::Older => spans.push("↓ older than installed binary".fg(DIM)),
             Installed::No => {}
         }
+        if c.shadowed_by.is_some() {
+            // The installed copy never runs; launchers and shells pick the other one.
+            spans.push("  ⚠ shadowed".fg(Color::Yellow));
+        }
         if c.stale {
             spans.push("  ⚠ stale".fg(Color::LightRed));
         }
@@ -714,9 +718,9 @@ fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
                 f.set_cursor_position(Position::new(row.x + 2 + LABEL_W as u16, row.y));
             }
         } else {
-            spans.push(Span::styled(field.input.clone(), Style::new().fg(Color::Yellow).bold()));
+            spans.push(Span::styled(field.input.text.clone(), Style::new().fg(Color::Yellow).bold()));
             if active {
-                let x = row.x + 2 + LABEL_W as u16 + field.input.chars().count() as u16;
+                let x = row.x + 2 + LABEL_W as u16 + field.input.col() as u16;
                 f.set_cursor_position(Position::new(x.min(row.right().saturating_sub(1)), row.y));
             }
         }
@@ -748,7 +752,7 @@ fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
             Span::styled("   ↑ back · Esc cancel", Style::new().fg(DIM)),
         ])
     } else {
-        Line::from("  Enter accept & next · type to replace · ↑/↓ move · Esc cancel".fg(DIM))
+        Line::from("  Enter accept & next · type to replace · ←/→ edit the default · ↑/↓ field · Esc cancel".fg(DIM))
     };
     f.render_widget(button, button_area);
 

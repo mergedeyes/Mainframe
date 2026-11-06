@@ -23,14 +23,15 @@ use crate::{
     form::{Form, FormEvent, FormKind},
     git::{self, GIT, GitInfo},
     install::{self, Candidate},
+    line::{Edit, LineEdit},
     project::{self, Kind, Op, Plan, Project, quote, quote_str},
     task::{Output, Task},
 };
 
 pub enum Mode {
     Normal,
-    Filter,
-    Prompt { kind: PromptKind, input: String, completer: Option<Completer> },
+    Filter(LineEdit),
+    Prompt { kind: PromptKind, input: LineEdit, completer: Option<Completer> },
     Confirm { msg: String, action: Confirmed },
     Help,
     GitMenu,
@@ -293,7 +294,7 @@ impl App {
     pub fn on_key(&mut self, key: KeyEvent) {
         match self.mode {
             Mode::Help => self.mode = Mode::Normal,
-            Mode::Filter => self.key_filter(key),
+            Mode::Filter(_) => self.key_filter(key),
             Mode::Prompt { .. } => self.key_prompt(key),
             Mode::Confirm { .. } => self.key_confirm(key),
             Mode::GitMenu => self.key_git(key),
@@ -360,7 +361,7 @@ impl App {
                 self.browser.reload();
                 self.invalidate();
             }
-            KeyCode::Char('/') => self.mode = Mode::Filter,
+            KeyCode::Char('/') => self.mode = Mode::Filter(LineEdit::new(self.browser.filter.clone())),
             KeyCode::Esc => {
                 if !self.browser.filter.is_empty() {
                     self.browser.filter.clear();
@@ -445,6 +446,7 @@ impl App {
     }
 
     fn key_filter(&mut self, key: KeyEvent) {
+        let Mode::Filter(edit) = &mut self.mode else { return };
         match key.code {
             KeyCode::Esc => {
                 self.browser.filter.clear();
@@ -460,16 +462,13 @@ impl App {
             }
             KeyCode::Down => self.browser.move_by(1),
             KeyCode::Up => self.browser.move_by(-1),
-            KeyCode::Backspace => {
-                self.browser.filter.pop();
-                self.browser.apply_filter();
+            _ => {
+                if edit.key(key) == Edit::Changed {
+                    self.browser.filter = edit.text.clone();
+                    self.browser.apply_filter();
+                    self.browser.select_first();
+                }
             }
-            KeyCode::Char(c) => {
-                self.browser.filter.push(c);
-                self.browser.apply_filter();
-                self.browser.select_first();
-            }
-            _ => {}
         }
     }
 
@@ -486,50 +485,42 @@ impl App {
         if let Some(c) = completer.as_mut().filter(|_| initial.is_empty()) {
             c.update(initial, false);
         }
-        self.mode = Mode::Prompt { kind, input: initial.to_string(), completer };
+        self.mode = Mode::Prompt { kind, input: LineEdit::new(initial), completer };
     }
 
     fn key_prompt(&mut self, key: KeyEvent) {
         let Mode::Prompt { kind, input, completer } = &mut self.mode else { return };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let has_items = completer.as_ref().is_some_and(|c| !c.items.is_empty());
-        let mut edited = true;
         match key.code {
-            KeyCode::Esc => return self.mode = Mode::Normal,
-            KeyCode::Char('c') if ctrl => return self.mode = Mode::Normal,
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Char('c') if ctrl => self.mode = Mode::Normal,
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up
                 if completer.is_some() && (has_items || matches!(key.code, KeyCode::Tab | KeyCode::BackTab)) =>
             {
+                // Completion works on the word before the cursor and keeps the rest.
                 let forward = matches!(key.code, KeyCode::Tab | KeyCode::Down);
                 if let Some(c) = completer.as_mut() {
-                    c.cycle(input, forward);
+                    let mut head = input.head().to_string();
+                    c.cycle(&mut head, forward);
+                    input.replace_head(head);
                 }
-                edited = false;
             }
-            KeyCode::Char('u') if ctrl => input.clear(),
-            KeyCode::Char('w') if ctrl => {
-                let trimmed = input.trim_end().len();
-                let cut = input[..trimmed].rfind([' ', '/']).map_or(0, |i| i + 1);
-                input.truncate(cut);
-            }
-            KeyCode::Backspace => {
-                input.pop();
-            }
-            KeyCode::Char(c) => input.push(c),
             KeyCode::Enter => {
-                let (kind, input) = (kind.clone(), input.trim().to_string());
+                let (kind, input) = (kind.clone(), input.text.trim().to_string());
                 self.mode = Mode::Normal;
                 if !input.is_empty() {
                     self.submit_prompt(kind, input);
                 }
-                return;
             }
-            _ => edited = false,
+            _ => {
+                if input.key(key) != Edit::Ignored
+                    && let Some(c) = completer.as_mut()
+                {
+                    c.update(input.head(), false);
+                }
+            }
         }
-        if edited
-            && let Some(c) = completer.as_mut() {
-                c.update(input, false);
-            }
     }
 
     fn key_confirm(&mut self, key: KeyEvent) {

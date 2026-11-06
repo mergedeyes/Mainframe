@@ -7,6 +7,7 @@ mod desktop;
 mod form;
 mod git;
 mod install;
+mod line;
 mod project;
 mod task;
 mod ui;
