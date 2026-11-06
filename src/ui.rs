@@ -10,7 +10,7 @@ use crate::{
     app::{AfterReview, App, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode, TaskPicker},
     complete::Completer,
     form::{Form, FormKind},
-    browser::{Preview, human_size},
+    browser::{Preview, Sort, human_size},
     config::pretty_path,
     desktop::{self, Change, Status as DesktopStatus},
     git,
@@ -132,6 +132,9 @@ fn draw_browser(f: &mut Frame, app: &mut App, area: Rect) {
     if !b.filter.is_empty() || matches!(app.mode, Mode::Filter(_)) {
         title.push(Span::styled(format!("/{} ", b.filter), Style::new().fg(Color::Yellow)));
     }
+    if b.sort != Sort::Name {
+        title.push(Span::styled(format!("↓ {} ", b.sort.label()), Style::new().fg(DIM)));
+    }
     let count = format!(" {}/{} ", b.state.selected().map_or(0, |i| i + 1), b.visible.len());
     let mut block = pane(Line::from(title), app.focus == Focus::Browser)
         .title_bottom(Line::from(count).right_aligned().fg(DIM));
@@ -167,7 +170,11 @@ fn draw_browser(f: &mut Frame, app: &mut App, area: Rect) {
             let marked = b.marked.contains(&e.path);
             let style = if marked { style.fg(Color::Magenta).bold() } else { style };
             let name = if e.is_dir { format!("{}/", e.name) } else { e.name.clone() };
-            let size = if e.is_dir { String::new() } else { human_size(e.size) };
+            let size = match (b.sort, e.modified) {
+                (Sort::Newest, Some(t)) => install::age(t),
+                _ if e.is_dir => String::new(),
+                _ => human_size(e.size),
+            };
             let name_w = inner_w.saturating_sub(size.len() + 4);
             let name = truncate(&name, name_w);
             let pad = inner_w.saturating_sub(3 + name.chars().count() + size.len());
@@ -318,7 +325,7 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
         let hint = if out.selected_loc().is_some() {
             " Enter edit · o VS Code · n N next/prev · Tab back "
         } else {
-            " ↑↓ scroll · / search · S save · [ ] tabs · z zoom · Tab back "
+            " ↑↓ scroll · / search · ^S save · [ ] tabs · z zoom · Tab back "
         };
         block = block.title_bottom(Line::from(hint).right_aligned().fg(DIM));
     }
@@ -534,13 +541,14 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
     (
         "view",
         &[
+            ("S", "sort: name / newest / largest"),
             ("v", "toggle preview"),
             ("V", "diff / contents for changed files"),
             ("w", "toggle output pane"),
             ("z", "zoom output"),
             ("[ / ]", "previous / next output tab"),
             ("n / N", "next / prev file:line in output"),
-            ("/  S", "(in output) search · save to file"),
+            ("/  ^S", "(in output) search · save to file"),
             ("Tab", "focus output (scroll)"),
             ("+ / -", "resize output"),
             ("q", "quit"),

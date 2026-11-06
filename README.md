@@ -30,7 +30,7 @@ Press `?` inside for all keys.
 | `:` / `!` | run a shell command / open your shell here |
 | `x` | kill the shown task, or close its tab once it's done |
 | `[` `]` | previous / next output tab |
-| `/` `S` | with the output focused (`Tab`): search it (`n N` then step through matches, `Esc` clears) / save it to a file |
+| `/` `^S` | with the output focused (`Tab`): search it (`n N` then step through matches, `Esc` clears) / save it to a file |
 | `@` / `W` | rerun the shown tab's command / watch mode: rerun (restart) it whenever a file in the project changes |
 | `n` `N` | jump to the next / previous `file:line` in the output (compiler errors, panics, tracebacks); `Enter` opens it in the editor at that line, `o` in VS Code |
 | `a A m d` | new file, new dir, rename/move, trash |
@@ -39,6 +39,7 @@ Press `?` inside for all keys.
 | `s` / `u` | git stage / unstage right in the list (no output pane) |
 | `v w z Tab + -` | preview, output pane, zoom output, focus output, resize |
 | `V` | modified files preview as their `git diff` (default) or their contents |
+| `S` | sort by name, newest first (shows ages) or largest first |
 | `,` | edit config (custom key-bound commands live there) |
 
 In `:`, ↑↓ walk the command history (kept in `~/.local/state/mainframe/history`), narrowed to

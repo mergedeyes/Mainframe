@@ -5,6 +5,7 @@ use std::{
     io::Read,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use ratatui::widgets::ListState;
@@ -17,6 +18,33 @@ pub struct Entry {
     pub is_exec: bool,
     pub is_symlink: bool,
     pub size: u64,
+    pub modified: Option<SystemTime>,
+}
+
+/// File list order; directories always come first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sort {
+    Name,
+    Newest,
+    Largest,
+}
+
+impl Sort {
+    pub fn next(self) -> Self {
+        match self {
+            Sort::Name => Sort::Newest,
+            Sort::Newest => Sort::Largest,
+            Sort::Largest => Sort::Name,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Sort::Name => "name",
+            Sort::Newest => "newest first",
+            Sort::Largest => "largest first",
+        }
+    }
 }
 
 pub struct Browser {
@@ -30,6 +58,7 @@ pub struct Browser {
     /// Dotfiles skipped by the last load (when `show_hidden` is off).
     pub hidden_count: usize,
     pub error: Option<String>,
+    pub sort: Sort,
     /// Entries marked with Space, kept across directories.
     pub marked: BTreeSet<PathBuf>,
 }
@@ -45,6 +74,7 @@ impl Browser {
             show_hidden,
             hidden_count: 0,
             error: None,
+            sort: Sort::Name,
             marked: BTreeSet::new(),
         };
         b.reload();
@@ -73,19 +103,30 @@ impl Browser {
                     let is_symlink = de.file_type().is_ok_and(|t| t.is_symlink());
                     // Follow symlinks for dir/exec detection.
                     let meta = fs::metadata(&path).or_else(|_| de.metadata());
-                    let (is_dir, is_exec, size) = match meta {
-                        Ok(m) => (m.is_dir(), m.is_file() && m.permissions().mode() & 0o111 != 0, m.len()),
-                        Err(_) => (false, false, 0),
+                    let (is_dir, is_exec, size, modified) = match meta {
+                        Ok(m) => (
+                            m.is_dir(),
+                            m.is_file() && m.permissions().mode() & 0o111 != 0,
+                            m.len(),
+                            m.modified().ok(),
+                        ),
+                        Err(_) => (false, false, 0, None),
                     };
-                    self.entries.push(Entry { name, path, is_dir, is_exec, is_symlink, size });
+                    self.entries.push(Entry { name, path, is_dir, is_exec, is_symlink, size, modified });
                 }
             }
             Err(e) => self.error = Some(e.to_string()),
         }
+        let sort = self.sort;
         self.entries.sort_by(|a, b| {
-            b.is_dir
-                .cmp(&a.is_dir)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            let by_name = || a.name.to_lowercase().cmp(&b.name.to_lowercase());
+            b.is_dir.cmp(&a.is_dir).then_with(|| match sort {
+                Sort::Name => by_name(),
+                Sort::Newest => b.modified.cmp(&a.modified).then_with(by_name),
+                // Directory sizes are just inode sizes, so those stay alphabetical.
+                Sort::Largest if a.is_dir => by_name(),
+                Sort::Largest => b.size.cmp(&a.size).then_with(by_name),
+            })
         });
         self.apply_filter();
         if let Some(name) = select {

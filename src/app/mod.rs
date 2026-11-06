@@ -395,6 +395,11 @@ impl App {
                 self.browser.reload();
                 self.invalidate();
             }
+            KeyCode::Char('S') => {
+                self.browser.sort = self.browser.sort.next();
+                self.browser.reload();
+                self.set_status(format!("sorted by {}", self.browser.sort.label()), Level::Info);
+            }
             KeyCode::Char('/') => self.mode = Mode::Filter(LineEdit::new(self.browser.filter.clone())),
             KeyCode::Esc => {
                 if !self.browser.filter.is_empty() {
@@ -494,7 +499,7 @@ impl App {
             KeyCode::Enter => return self.open_loc(false),
             KeyCode::Char('o') => return self.open_loc(true),
             KeyCode::Char('/') => self.mode = Mode::Search(LineEdit::new(out.search.clone())),
-            KeyCode::Char('S') => {
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let name: String = self.tabs[self.tab]
                     .label
                     .chars()
