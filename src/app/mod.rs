@@ -10,6 +10,7 @@ mod project_picker;
 mod prompt;
 mod task_picker;
 mod tasks;
+mod workspaces;
 
 use std::{
     env,
@@ -27,6 +28,7 @@ pub use notes_view::NotesView;
 pub use project_picker::ProjectPicker;
 pub use task_picker::TaskPicker;
 pub use tasks::Tab;
+use workspaces::Workspaces;
 
 use crate::{
     browser::{self, Browser, Preview},
@@ -181,6 +183,9 @@ pub struct App {
     pub open_todos: usize,
     /// `E` in the notes view: open them again once the editor closes.
     reopen_notes: Option<(PathBuf, String)>,
+    /// The project whose output tabs are shown, and the other projects' tabs.
+    pub workspace: Option<PathBuf>,
+    workspaces: Workspaces,
 }
 
 impl App {
@@ -222,6 +227,8 @@ impl App {
             notes_root: PathBuf::new(),
             open_todos: 0,
             reopen_notes: None,
+            workspace: None,
+            workspaces: Workspaces::new(),
         };
         app.zoxide = app.config.zoxide && project::which("zoxide").is_some();
         app.browser.select_first();
@@ -329,10 +336,15 @@ impl App {
 
     /// Recomputed whenever the directory changes. The git root counts when the projects
     /// folder doesn't place you; `git status` answers later, so it's redone then too.
+    /// Entering another project also brings up its output tabs.
     fn update_notes_root(&mut self) {
         let dir = projects::dir(&self.config);
-        self.notes_root = projects::owner(&self.browser.cwd, dir.as_deref(), self.git.as_ref(), self.project.as_ref());
+        let owner = projects::owner(&self.browser.cwd, dir.as_deref(), self.git.as_ref(), self.project.as_ref());
+        self.notes_root = owner.clone().unwrap_or_else(|| self.browser.cwd.clone());
         self.refresh_todo_count();
+        if let Some(root) = owner {
+            self.switch_workspace(root);
+        }
     }
 
     pub(super) fn refresh_todo_count(&mut self) {

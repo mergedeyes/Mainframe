@@ -1,8 +1,8 @@
 //! Commands run with `:`, kept across sessions in `$XDG_STATE_HOME/mainframe/history`.
 
-use std::{env, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
-use crate::config::home;
+use crate::config::state_dir;
 
 const MAX: usize = 1000;
 
@@ -14,10 +14,7 @@ pub struct History {
 
 impl History {
     pub fn load() -> Self {
-        let base = env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home().join(".local/state"));
-        let path = base.join("mainframe").join("history");
+        let path = state_dir().join("history");
         let entries = fs::read_to_string(&path)
             .map(|t| t.lines().filter(|l| !l.is_empty()).map(String::from).collect())
             .unwrap_or_default();
@@ -62,7 +59,7 @@ mod tests {
 
     #[test]
     fn prefix_navigation() {
-        let mut h = History { entries: Vec::new(), path: env::temp_dir().join("mainframe-history-test") };
+        let mut h = History { entries: Vec::new(), path: std::env::temp_dir().join("mainframe-history-test") };
         for c in ["cargo build", "ls", "cargo test", "ls"] {
             h.add(c);
         }

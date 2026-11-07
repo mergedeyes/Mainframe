@@ -62,37 +62,36 @@ impl App {
         self.tabs.iter().any(Tab::running)
     }
 
-    pub fn kill_all(&mut self) {
-        for task in self.tabs.iter_mut().filter_map(|t| t.task.as_mut()) {
-            task.kill();
-        }
-    }
-
-    /// Moves new output into every tab and wraps up tasks that finished.
+    /// Moves new output into every tab, also other projects' (their tasks keep going),
+    /// and wraps up tasks that finished.
     pub(super) fn poll_tasks(&mut self) {
+        let mut finished: Vec<(Option<String>, Finished)> = self.tabs.iter_mut().filter_map(poll_tab).map(|f| (None, f)).collect();
+        let mut finished_in = Vec::new();
+        for (root, ws) in &mut self.workspaces {
+            let name = root.file_name().map(|n| n.to_string_lossy().into_owned());
+            let before = finished.len();
+            finished.extend(ws.tabs.iter_mut().filter_map(poll_tab).map(|f| (name.clone(), f)));
+            if finished.len() > before {
+                finished_in.push(root.clone());
+            }
+        }
+        for root in &finished_in {
+            self.save_workspace(root);
+        }
         let mut done = None;
         let mut notify = Vec::new();
+        let mut here = false;
         let notify_after = self.config.notify_after;
-        for tab in &mut self.tabs {
-            let Some(task) = &mut tab.task else { continue };
-            let Some((status, took)) = task.poll(&mut tab.output) else { continue };
-            tab.task = None;
-            let ok = status.success();
-            let code = match status.code() {
-                Some(c) => format!("exit {c}"),
-                None => "killed".into(),
+        for (project, f) in finished {
+            here |= project.is_none();
+            let label = match project {
+                Some(p) => format!("{p} · {}", f.label),
+                None => f.label,
             };
-            let detail = format!("{code} · {:.1}s", took.as_secs_f32());
-            let style = if ok { Color::Green } else { Color::Red };
-            tab.output.push(Line::from(Span::styled(
-                format!("── {} {}: {detail}", if ok { "✔" } else { "✘" }, tab.label),
-                Style::new().fg(style).add_modifier(Modifier::BOLD),
-            )));
-            done = Some((format!("{}: {detail}", tab.label), if ok { Level::Ok } else { Level::Err }));
-            if notify_after > 0 && took.as_secs() >= notify_after {
-                notify.push((format!("{} {}", if ok { "✔" } else { "✘" }, tab.label), detail.clone()));
+            done = Some((format!("{label}: {}", f.detail), if f.ok { Level::Ok } else { Level::Err }));
+            if notify_after > 0 && f.took.as_secs() >= notify_after {
+                notify.push((format!("{} {label}", if f.ok { "✔" } else { "✘" }), f.detail));
             }
-            tab.last_run = Some(LastRun { label: tab.label.clone(), ok, detail });
         }
         if !notify.is_empty() {
             // The bell marks the terminal urgent; the notification is for when it's not in view.
@@ -106,6 +105,9 @@ impl App {
         }
         if let Some((msg, level)) = done {
             self.set_status(msg, level);
+        }
+        if here {
+            self.save_current();
             // Builds create files and git commands change status; show both.
             self.browser.reload();
             self.invalidate();
@@ -205,21 +207,33 @@ impl App {
         }
     }
 
-    /// Kills the shown tab's task, or closes the tab when it has finished.
+    /// Kills the shown tab's task, or closes the tab when it has finished; the last tab
+    /// is cleared instead, so a project's saved output can go too.
     pub(super) fn kill_task(&mut self) {
         let n = self.tabs.len();
-        match &mut self.tabs[self.tab].task {
+        let tab = &mut self.tabs[self.tab];
+        match &mut tab.task {
             Some(task) => {
                 task.kill();
-                self.set_status("killed", Level::Info);
+                return self.set_status("killed", Level::Info);
             }
             None if n > 1 => {
                 let tab = self.tabs.remove(self.tab);
                 self.tab = self.tab.min(self.tabs.len() - 1);
                 self.set_status(format!("closed {}", tab.label), Level::Info);
             }
-            None => self.set_status("nothing running", Level::Info),
+            None if tab.plan.is_some() || !tab.output.lines.is_empty() => {
+                if tab.watch.is_some() {
+                    return self.set_status("watching — W stops it, then x clears", Level::Info);
+                }
+                *tab = Tab::default();
+                self.show_output = false;
+                self.zoom_output = false;
+                self.set_status("output cleared", Level::Info);
+            }
+            None => return self.set_status("nothing running", Level::Info),
         }
+        self.save_current();
     }
 
     /// n / N: picks the next or previous `file:line` in the shown output.
@@ -266,4 +280,31 @@ impl App {
         self.tab = (self.tab as isize + delta).rem_euclid(n) as usize;
         self.show_output = true;
     }
+}
+
+struct Finished {
+    label: String,
+    ok: bool,
+    detail: String,
+    took: std::time::Duration,
+}
+
+/// Moves new output into `tab`; once its task has finished, marks the end in the output.
+fn poll_tab(tab: &mut Tab) -> Option<Finished> {
+    let task = tab.task.as_mut()?;
+    let (status, took) = task.poll(&mut tab.output)?;
+    tab.task = None;
+    let ok = status.success();
+    let code = match status.code() {
+        Some(c) => format!("exit {c}"),
+        None => "killed".into(),
+    };
+    let detail = format!("{code} · {:.1}s", took.as_secs_f32());
+    let style = if ok { Color::Green } else { Color::Red };
+    tab.output.push(Line::from(Span::styled(
+        format!("── {} {}: {detail}", if ok { "✔" } else { "✘" }, tab.label),
+        Style::new().fg(style).add_modifier(Modifier::BOLD),
+    )));
+    tab.last_run = Some(LastRun { label: tab.label.clone(), ok, detail: detail.clone() });
+    Some(Finished { label: tab.label.clone(), ok, detail, took })
 }

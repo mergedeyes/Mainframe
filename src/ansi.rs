@@ -74,10 +74,12 @@ fn apply_sgr(mut style: Style, params: &str) -> Style {
             3 => style.add_modifier(Modifier::ITALIC),
             4 => style.add_modifier(Modifier::UNDERLINED),
             7 => style.add_modifier(Modifier::REVERSED),
+            9 => style.add_modifier(Modifier::CROSSED_OUT),
             22 => style.remove_modifier(Modifier::BOLD | Modifier::DIM),
             23 => style.remove_modifier(Modifier::ITALIC),
             24 => style.remove_modifier(Modifier::UNDERLINED),
             27 => style.remove_modifier(Modifier::REVERSED),
+            29 => style.remove_modifier(Modifier::CROSSED_OUT),
             30..=37 => style.fg(basic(n - 30)),
             90..=97 => style.fg(bright(n - 90)),
             39 => style.fg(Color::Reset),
@@ -93,6 +95,79 @@ fn apply_sgr(mut style: Style, params: &str) -> Style {
         };
     }
     style
+}
+
+/// The way back: a line as text with SGR codes, so saved output keeps its colors and
+/// `parse_line` reads it in again.
+pub fn encode_line(line: &Line) -> String {
+    let mut out = String::new();
+    let mut styled = false;
+    for span in &line.spans {
+        let style = line.style.patch(span.style);
+        let codes = sgr(style);
+        if !codes.is_empty() || styled {
+            out.push_str(&format!("\x1b[0{codes}m"));
+            styled = !codes.is_empty();
+        }
+        // Escapes can't be in parsed text, but a hand-built line could carry one.
+        out.extend(span.content.chars().filter(|&c| c != '\x1b'));
+    }
+    if styled {
+        out.push_str("\x1b[0m");
+    }
+    out
+}
+
+/// `;1;31`-style parameters for `style`, empty for the default look.
+fn sgr(style: Style) -> String {
+    let mut codes = String::new();
+    for (m, code) in [
+        (Modifier::BOLD, 1),
+        (Modifier::DIM, 2),
+        (Modifier::ITALIC, 3),
+        (Modifier::UNDERLINED, 4),
+        (Modifier::REVERSED, 7),
+        (Modifier::CROSSED_OUT, 9),
+    ] {
+        if style.add_modifier.contains(m) {
+            codes.push_str(&format!(";{code}"));
+        }
+    }
+    if let Some(c) = style.fg.and_then(|c| color_code(c, false)) {
+        codes.push_str(&c);
+    }
+    if let Some(c) = style.bg.and_then(|c| color_code(c, true)) {
+        codes.push_str(&c);
+    }
+    codes
+}
+
+fn color_code(color: Color, bg: bool) -> Option<String> {
+    let base = if bg { 10 } else { 0 };
+    let basic = [Color::Black, Color::Red, Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Gray];
+    let bright = [
+        Color::DarkGray,
+        Color::LightRed,
+        Color::LightGreen,
+        Color::LightYellow,
+        Color::LightBlue,
+        Color::LightMagenta,
+        Color::LightCyan,
+        Color::White,
+    ];
+    let lead = if bg { 48 } else { 38 };
+    Some(match color {
+        Color::Reset => return None,
+        Color::Indexed(n) => format!(";{lead};5;{n}"),
+        Color::Rgb(r, g, b) => format!(";{lead};2;{r};{g};{b}"),
+        c => {
+            if let Some(i) = basic.iter().position(|&b| b == c) {
+                format!(";{}", 30 + base + i)
+            } else {
+                format!(";{}", 90 + base + bright.iter().position(|&b| b == c)?)
+            }
+        }
+    })
 }
 
 fn extended(it: &mut impl Iterator<Item = u16>) -> Option<Color> {
@@ -144,6 +219,18 @@ mod tests {
         assert_eq!(text(&parse_line(raw)), "Finished `release` profile [optimized]");
         let bel = "a\x1b]8;;http://x\x07link\x1b]8;;\x07b";
         assert_eq!(text(&parse_line(bel)), "alinkb");
+    }
+
+    #[test]
+    fn encodes_what_it_parses() {
+        let raw = "\x1b[1;92mFinished\x1b[0m plain \x1b[38;5;208mindexed\x1b[48;2;1;2;3m rgb bg\x1b[0m \x1b[2;9;3mdim\x1b[0m";
+        let line = parse_line(raw);
+        assert_eq!(parse_line(&encode_line(&line)), line);
+        // Unstyled lines stay plain text.
+        assert_eq!(encode_line(&parse_line("just text")), "just text");
+        // Line-wide styles end up on each span.
+        let l = Line::from("x").style(Style::new().fg(Color::Red));
+        assert_eq!(parse_line(&encode_line(&l)).spans[0].style.fg, Some(Color::Red));
     }
 
     #[test]

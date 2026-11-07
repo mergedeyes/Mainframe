@@ -86,7 +86,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
             app.after_foreground(&fg, output);
         }
     }
-    app.kill_all();
+    app.shutdown();
     Ok(())
 }
 

@@ -93,6 +93,13 @@ impl Task {
         }
     }
 
+    /// Asks the task's whole process group to stop, without waiting for it.
+    pub fn signal(&self) {
+        unsafe {
+            libc::killpg(self.child.id() as libc::pid_t, libc::SIGTERM);
+        }
+    }
+
     pub fn kill(&mut self) {
         let pid = self.child.id() as libc::pid_t;
         unsafe {
@@ -173,6 +180,11 @@ impl Output {
             self.match_cursor = self.match_cursor.and_then(|c| c.checked_sub(gone));
         }
         self.scroll = self.scroll.min(self.max_scroll());
+    }
+
+    /// Where the task ran.
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
     }
 
     /// The location picked with n / N.

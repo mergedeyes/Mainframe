@@ -159,6 +159,23 @@ pub fn home() -> PathBuf {
     env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into())
 }
 
+/// `$XDG_STATE_HOME/mainframe`: history and saved output.
+pub fn state_dir() -> PathBuf {
+    env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".local/state"))
+        .join("mainframe")
+}
+
+/// A file name for things kept per project, e.g. `~/Projekte/Games/bash_emu` →
+/// `Projekte%2FGames%2Fbash_emu`: readable, and no two folders share one.
+pub fn path_key(root: &Path) -> String {
+    let home = home();
+    let rel = root.strip_prefix(&home).map_or_else(|_| root.to_string_lossy(), |r| r.to_string_lossy());
+    let rel = rel.trim_matches('/');
+    if rel.is_empty() { "~".to_string() } else { rel.replace('%', "%25").replace('/', "%2F") }
+}
+
 pub fn expand_tilde(s: &str) -> PathBuf {
     match s.strip_prefix('~') {
         Some(rest) => home().join(rest.trim_start_matches('/')),

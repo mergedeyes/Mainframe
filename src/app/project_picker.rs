@@ -20,6 +20,8 @@ pub struct ProjectPicker {
     pub items: Vec<Entry>,
     /// Open todos per item, same order as `items`.
     pub todos: Vec<usize>,
+    /// Tasks running per item (its output tabs live on while you're elsewhere).
+    pub running: Vec<usize>,
     /// The project you're in, marked in the list.
     pub current: PathBuf,
     pub filter: LineEdit,
@@ -64,10 +66,12 @@ impl App {
             return self.set_status(format!("no projects in {}", config::pretty_path(&root)), Level::Info);
         }
         let todos = items.iter().map(|e| notes::open_count(&e.path)).collect();
+        let running = items.iter().map(|e| self.running_in(&e.path)).collect();
         let mut picker = ProjectPicker {
             root,
             items,
             todos,
+            running,
             current: self.notes_root.clone(),
             filter: LineEdit::default(),
             visible: Vec::new(),

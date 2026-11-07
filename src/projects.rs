@@ -129,19 +129,20 @@ fn activity(dir: &Path) -> Option<SystemTime> {
     top.chain(git).chain(mtime(dir)).max()
 }
 
-/// Whose notes `M` opens from `cwd`: the listed project it's in, else the git repo,
-/// else the build tool's project, else the folder itself.
-pub fn owner(cwd: &Path, projects: Option<&Path>, git: Option<&GitInfo>, project: Option<&Project>) -> PathBuf {
+/// The project `cwd` belongs to (whose notes `M` opens, whose output tabs are shown):
+/// the listed project it's in, else the git repo, else the build tool's project.
+/// None outside of any, e.g. in `~`, `~/Downloads` or a group folder like `~/Projekte/Games`.
+pub fn owner(cwd: &Path, projects: Option<&Path>, git: Option<&GitInfo>, project: Option<&Project>) -> Option<PathBuf> {
     if let Some(root) = projects
         && cwd.starts_with(root)
         && cwd != root
         && let Some(e) = scan_owner(root, cwd)
     {
-        return e;
+        return Some(e);
     }
-    git.map(|g| g.root.clone())
-        .or_else(|| project.map(|p| p.root.clone()))
-        .unwrap_or_else(|| cwd.to_path_buf())
+    // A dotfiles repo at $HOME doesn't make everything below it one project.
+    let home = config::home();
+    git.map(|g| g.root.clone()).filter(|r| *r != home).or_else(|| project.map(|p| p.root.clone()))
 }
 
 /// Like `scan`, but only walks down the branch that holds `cwd`.

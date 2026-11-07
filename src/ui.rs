@@ -96,6 +96,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     if others > 0 {
         right.push_span(Span::styled(format!("+{others} running "), Style::new().fg(DIM)));
     }
+    let elsewhere = app.running_elsewhere();
+    if elsewhere > 0 {
+        right.push_span(Span::styled(format!("▶ {elsewhere} in other projects (J) "), Style::new().fg(DIM)));
+    }
 
     let mut badges = Vec::new();
     if let Some(p) = &app.project {
@@ -555,7 +559,7 @@ const HELP: [&[HelpSection]; 3] = [
                 ("w / z", "show / zoom output"),
                 ("+ / -", "resize output"),
                 ("[ / ]", "prev / next tab"),
-                ("x ^c", "kill · x closes tab"),
+                ("x ^c", "kill · x close/clear tab"),
                 ("@ / W", "rerun / watch"),
                 ("n / N", "next / prev file:line"),
                 ("/  ^S", "search / save it"),
@@ -711,7 +715,7 @@ fn draw_project_picker(f: &mut Frame, picker: &mut ProjectPicker, area: Rect) {
 
     // name · kind · todos · age, the name taking what's left.
     let w = list_area.width.saturating_sub(2) as usize;
-    let name_w = w.saturating_sub(2 + 7 + 6 + 9);
+    let name_w = w.saturating_sub(2 + 7 + 5 + 6 + 9);
     let items: Vec<ListItem> = picker
         .visible
         .iter()
@@ -732,8 +736,13 @@ fn draw_project_picker(f: &mut Frame, picker: &mut ProjectPicker, area: Rect) {
                 0 => String::new(),
                 n => format!("☐ {n}"),
             };
+            let running = match picker.running[i] {
+                0 => String::new(),
+                n => format!("▶ {n}"),
+            };
             spans.extend([
                 Span::raw(" ".repeat(pad)),
+                Span::styled(format!("{running:>5}"), Style::new().fg(Color::Green)),
                 Span::styled(format!(" {:<6}", e.kind), Style::new().fg(Color::Yellow)),
                 Span::styled(format!("{todos:>5} "), Style::new().fg(Color::Yellow)),
                 Span::styled(format!("{:>9}", e.active.map(install::age).unwrap_or_default()), Style::new().fg(DIM)),

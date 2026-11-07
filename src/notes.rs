@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::config::home;
+use crate::config::{home, path_key};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
@@ -110,14 +110,9 @@ pub fn dir() -> PathBuf {
         .join("notes")
 }
 
-/// `~/Projekte/Games/bash_emu` → `Projekte%2FGames%2Fbash_emu.md`: readable, and no two
-/// projects share a file.
+/// `~/Projekte/Games/bash_emu` → `Projekte%2FGames%2Fbash_emu.md`.
 pub fn file_for(root: &Path) -> PathBuf {
-    let home = home();
-    let rel = root.strip_prefix(&home).map_or_else(|_| root.to_string_lossy(), |r| r.to_string_lossy());
-    let rel = rel.trim_matches('/');
-    let name = if rel.is_empty() { "~".to_string() } else { rel.replace('%', "%25").replace('/', "%2F") };
-    dir().join(format!("{name}.md"))
+    dir().join(format!("{}.md", path_key(root)))
 }
 
 fn parse(text: &str) -> Vec<Item> {

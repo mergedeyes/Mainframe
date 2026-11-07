@@ -9,6 +9,12 @@ mainframe [DIR]
 
 The file browser fills the screen; an output pane opens underneath when something runs.
 Starting a task while another runs opens it in a new output tab, so a dev server can keep going while you build.
+Each project keeps its own output tabs: moving into another project (with `J` or just by browsing there) brings
+back the output it had when you left, while the previous project's tasks keep running and notify when they finish.
+Folders outside any project keep whatever tabs you had. Watch mode (`W`) pauses while its project isn't shown and
+catches up when you return. The tabs are saved with their colors (in `~/.local/state/mainframe/output/`, the last
+5000 lines per tab), so after a restart each project shows its output again, `@` reruns and `n N` still jump;
+tasks still running when you quit are marked as stopped.
 The file list, git markers and the branch badge (↑ ↓ ●) refresh by themselves when something changes elsewhere: files anywhere in the repo, commits, checkouts, fetch, push and pull, also in linked worktrees.
 Press `?` inside for all keys.
 
@@ -19,7 +25,7 @@ Press `?` inside for all keys.
 | `j k` / arrows, `h l` | move, parent, enter |
 | `Enter` | enter dir / edit text file / run executable |
 | `/` · `c` · `Z` · `~` · `.` | filter · go to path or zoxide keywords · zoxide picker · home · toggle hidden |
-| `J` | jump to a project in your projects folder (`~/Projekte`, `~/Projects`, … or `projects_dir`): most recently active first, with kind and open todos; group folders like `Games/` are opened up into their projects; type to filter, `Enter` goes there, `^T` its notes, `^O` VS Code |
+| `J` | jump to a project in your projects folder (`~/Projekte`, `~/Projects`, … or `projects_dir`): most recently active first, with kind, running tasks and open todos; group folders like `Games/` are opened up into their projects; type to filter, `Enter` goes there, `^T` its notes, `^O` VS Code |
 | `M` | notes and todos for the project you're in: `a` todo, `n` note line, `Enter` edit, `Space` checks a todo off, `t` todo ⇄ note, `d` delete, `u` undo, `J K` move, `C` clears checked ones, `E` the whole file in the editor, `Esc` closes. The header shows open todos (`☐ 3`) |
 | `Ctrl-P` | fuzzy-find any file in the repo / project (`git ls-files`, so ignored files stay out); `Enter` shows it in the list, `^E` edits it |
 | `e` | edit in nano (configurable) |
@@ -30,7 +36,7 @@ Press `?` inside for all keys.
 | `i` | install picker: every executable in the project with profile, target, arch, age, install state; also updates the project's `.desktop` entry (shows a diff first, `d` to review it alone) |
 | `g` | git menu: status, diff, log, stage, commit, push/pull, branches, stash, `gh repo create`; `g r` makes a release: bumps the version in `Cargo.toml` / `package.json` / `pyproject.toml` (and the lock file), commits it on main or through a PR (merged right away, or, when `main` requires checks or reviews or CI runs on PRs, left for you to merge on GitHub once CI passes; the next `g r` then tags it), tags `vX.Y.Z`, pushes the tag and watches the release workflow it starts, or runs `gh release create` when there is none; `g R` lists releases and CI runs |
 | `:` / `!` | run a shell command / open your shell here |
-| `x` | kill the shown task, or close its tab once it's done |
+| `x` | kill the shown task, or close its tab once it's done (the last tab is cleared, its saved output too) |
 | `[` `]` | previous / next output tab |
 | `/` `^S` | with the output focused (`Tab`): search it (`n N` then step through matches, `Esc` clears) / save it to a file |
 | `@` / `W` | rerun the shown tab's command / watch mode: rerun (restart) it whenever a file in the project changes |
