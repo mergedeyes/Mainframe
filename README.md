@@ -20,7 +20,7 @@ Press `?` inside for all keys.
 | `Enter` | enter dir / edit text file / run executable |
 | `/` · `c` · `Z` · `~` · `.` | filter · go to path or zoxide keywords · zoxide picker · home · toggle hidden |
 | `J` | jump to a project in your projects folder (`~/Projekte`, `~/Projects`, … or `projects_dir`): most recently active first, with kind and open todos; group folders like `Games/` are opened up into their projects; type to filter, `Enter` goes there, `^T` its notes, `^O` VS Code |
-| `M` | notes and todos for the project you're in: `a` todo, `n` note line, `Enter` edit, `Space` done, `t` todo ⇄ note, `d` delete, `u` undo, `J K` move, `C` clear done, `E` the whole file in the editor. The header shows open todos (`☐ 3`) |
+| `M` | notes and todos for the project you're in: `a` todo, `n` note line, `Enter` edit, `Space` checks a todo off, `t` todo ⇄ note, `d` delete, `u` undo, `J K` move, `C` clears checked ones, `E` the whole file in the editor, `Esc` closes. The header shows open todos (`☐ 3`) |
 | `Ctrl-P` | fuzzy-find any file in the repo / project (`git ls-files`, so ignored files stay out); `Enter` shows it in the list, `^E` edits it |
 | `e` | edit in nano (configurable) |
 | `o` / `O` | open file / whole project in VS Code |

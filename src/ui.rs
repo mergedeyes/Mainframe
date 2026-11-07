@@ -758,9 +758,12 @@ fn draw_notes(f: &mut Frame, view: &mut NotesView, area: Rect) {
     let keys = if view.editing.is_some() {
         " Enter save · Esc cancel "
     } else {
-        " a todo  n note  ⏎ edit  ␣ done  t ⇄note  d del  u undo  J K move  C clear done  E editor "
+        " a todo  n note  ⏎ edit  ␣ check  t ⇄note  d del  u undo  J K move  C clear checked  E editor "
     };
-    let block = pane(Line::from(title), true).title_bottom(Line::from(keys).right_aligned().fg(DIM));
+    let close = if view.editing.is_some() { "" } else { " Esc close " };
+    let block = pane(Line::from(title), true)
+        .title(Line::from(close).right_aligned().fg(DIM))
+        .title_bottom(Line::from(keys).right_aligned().fg(DIM));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
