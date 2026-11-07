@@ -11,6 +11,7 @@ use crate::{
     form::{FormEvent, FormKind},
     git::{self, GIT},
     project::{self, Plan, quote, quote_str},
+    release,
 };
 
 impl App {
@@ -104,6 +105,22 @@ impl App {
                 }
                 return;
             }
+            'r' | 'R' => {
+                let Some(g) = &self.git else { return };
+                let root = g.root.clone();
+                if c == 'R' {
+                    match release::overview(&root) {
+                        Ok(cmd) => self.start_task("releases".into(), Plan { cmd, cwd: root }),
+                        Err(e) => self.set_status(e, Level::Err),
+                    }
+                    return;
+                }
+                match release::form(&root, &g.branch, g.dirty()) {
+                    Ok(form) => self.mode = Mode::Form(form),
+                    Err(e) => self.set_status(e, Level::Err),
+                }
+                return;
+            }
             'g' => {
                 let Some(tool) = ["lazygit", "gitui", "tig"].into_iter().find(|t| project::which(t).is_some()) else {
                     self.set_status("none of lazygit, gitui or tig is installed", Level::Err);
@@ -126,7 +143,18 @@ impl App {
             }
             FormEvent::Submit => {
                 let Mode::Form(form) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
-                match form.kind {
+                match &form.kind {
+                    FormKind::Release(ctx) => {
+                        if let Err(e) = release::check(&form, ctx) {
+                            self.set_status(e, Level::Err);
+                            self.mode = Mode::Form(form);
+                            return;
+                        }
+                        let cmd = release::steps(&form, ctx).join(" && ");
+                        let label = format!("release {}", form.get("version").trim());
+                        let cwd = ctx.root.clone();
+                        self.start_task(label, Plan { cmd, cwd });
+                    }
                     FormKind::GhRepoCreate => {
                         let source = config::expand_tilde(form.get("source"));
                         if !source.is_dir() {

@@ -11,24 +11,36 @@ pub struct Field {
     /// What the user typed; empty means "use the default".
     pub input: LineEdit,
     /// Non-empty for choice fields (cycled with ←/→ or picked by first letter).
-    pub options: Vec<&'static str>,
+    pub options: Vec<String>,
     pub choice: usize,
-    pub hint: &'static str,
+    pub hint: String,
     /// Directory field: Tab completes paths instead of moving to the next field.
     pub dir: bool,
 }
 
 impl Field {
-    pub fn text(label: &'static str, default: impl Into<String>, hint: &'static str) -> Self {
-        Self { label, default: default.into(), input: LineEdit::default(), options: Vec::new(), choice: 0, hint, dir: false }
+    pub fn text(label: &'static str, default: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self {
+            label,
+            default: default.into(),
+            input: LineEdit::default(),
+            options: Vec::new(),
+            choice: 0,
+            hint: hint.into(),
+            dir: false,
+        }
     }
 
-    pub fn dir(label: &'static str, default: impl Into<String>, hint: &'static str) -> Self {
+    pub fn dir(label: &'static str, default: impl Into<String>, hint: impl Into<String>) -> Self {
         Self { dir: true, ..Self::text(label, default, hint) }
     }
 
-    pub fn choice(label: &'static str, options: &[&'static str], default: usize, hint: &'static str) -> Self {
-        Self { label, default: String::new(), input: LineEdit::default(), options: options.to_vec(), choice: default, hint, dir: false }
+    pub fn choice(label: &'static str, options: &[&str], default: usize, hint: impl Into<String>) -> Self {
+        Self {
+            options: options.iter().map(|o| o.to_string()).collect(),
+            choice: default,
+            ..Self::text(label, "", hint)
+        }
     }
 
     pub fn is_choice(&self) -> bool {
@@ -37,7 +49,7 @@ impl Field {
 
     pub fn value(&self) -> &str {
         if self.is_choice() {
-            self.options[self.choice]
+            &self.options[self.choice]
         } else if self.input.is_empty() {
             &self.default
         } else {
@@ -46,9 +58,9 @@ impl Field {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FormKind {
     GhRepoCreate,
+    Release(Box<crate::release::Ctx>),
 }
 
 pub struct Form {

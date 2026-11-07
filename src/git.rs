@@ -64,7 +64,8 @@ impl GitInfo {
     }
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
+/// stdout of a successful `git` run in `cwd`.
+pub fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let out = Command::new("git")
         .args(args)
         .current_dir(cwd)
@@ -228,6 +229,13 @@ pub const MENU: &[(&str, &[MenuItem])] = &[
             item('f', "fetch"),
             item('p', "pull"),
             item('P', "push"),
+        ],
+    ),
+    (
+        "release (gh)",
+        &[
+            item('r', "release… bump, tag, CI"),
+            item('R', "releases & CI runs"),
         ],
     ),
     (

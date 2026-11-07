@@ -12,6 +12,7 @@ mod install;
 mod line;
 mod locate;
 mod project;
+mod release;
 mod targets;
 mod task;
 mod ui;

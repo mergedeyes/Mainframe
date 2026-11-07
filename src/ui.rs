@@ -879,7 +879,17 @@ fn draw_desktop_review(f: &mut Frame, review: &DesktopReview, area: Rect) {
 }
 
 fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
-    let rect = popup(area, 92, form.fields.len() as u16 + 9);
+    // One line per step; long ones wrap.
+    let (steps, verb) = match &form.kind {
+        FormKind::GhRepoCreate => (vec![crate::git::gh_repo_create_cmd(form)], "create"),
+        FormKind::Release(ctx) => (crate::release::steps(form, ctx), "release"),
+    };
+    let w = 92.min(area.width.saturating_sub(2));
+    let mut cmd = vec![Line::from("  command".fg(DIM))];
+    for (i, step) in steps.iter().enumerate() {
+        cmd.extend(hang_wrap(if i == 0 { "  $  " } else { "  && " }, step, w.saturating_sub(7) as usize));
+    }
+    let rect = popup(area, w, form.fields.len() as u16 + 6 + cmd.len() as u16);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(form.title.clone().bold()), true);
     let inner = block.inner(rect);
@@ -937,21 +947,11 @@ fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
         f.render_widget(Line::from(format!("  ⚠ {note}").yellow()), note_area);
     }
 
-    let cmd = match form.kind {
-        FormKind::GhRepoCreate => crate::git::gh_repo_create_cmd(form),
-    };
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::from("  command".fg(DIM)),
-            Line::from(vec![Span::styled("  $ ", Style::new().fg(DIM)), Span::raw(cmd)]),
-        ])
-        .wrap(Wrap { trim: false }),
-        cmd_area,
-    );
+    f.render_widget(Paragraph::new(cmd).wrap(Wrap { trim: false }), cmd_area);
 
     let button = if form.on_confirm_step() {
         Line::from(vec![
-            Span::styled("  ▶ Enter: create  ", Style::new().bg(Color::Green).fg(Color::Black).bold()),
+            Span::styled(format!("  ▶ Enter: {verb}  "), Style::new().bg(Color::Green).fg(Color::Black).bold()),
             Span::styled("   ↑ back · Esc cancel", Style::new().fg(DIM)),
         ])
     } else {
@@ -963,6 +963,30 @@ fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
     if let Some(c) = form.completer.as_ref().filter(|_| on_dir_field) {
         draw_completions(f, c, fields_area.x + 1 + LABEL_W as u16, fields_area.y + form.step as u16, false);
     }
+}
+
+/// Word-wraps `text` to `width` behind `lead`, continuation lines indented under the text.
+fn hang_wrap(lead: &'static str, text: &str, width: usize) -> Vec<Line<'static>> {
+    let mut rows = vec![String::new()];
+    for word in text.split(' ') {
+        let row = rows.last_mut().expect("never empty");
+        if !row.is_empty() && row.chars().count() + 1 + word.chars().count() > width.max(1) {
+            rows.push(word.to_string());
+        } else {
+            if !row.is_empty() {
+                row.push(' ');
+            }
+            row.push_str(word);
+        }
+    }
+    let indent = " ".repeat(lead.chars().count());
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let lead = if i == 0 { lead.to_string() } else { indent.clone() };
+            Line::from(vec![Span::styled(lead, Style::new().fg(DIM)), Span::raw(r)])
+        })
+        .collect()
 }
 
 /// Keeps the end of a path, which is the part that matters: `…/deep/dir`.

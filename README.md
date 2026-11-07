@@ -26,7 +26,7 @@ Press `?` inside for all keys.
 | `b` / `B` / `t` | build / release build / test |
 | `T` | task picker: the build tool's usual commands, cargo bins and examples, `go run ./cmd/…`, Python entry points, package.json scripts, make targets and just recipes — type to filter, `Enter` runs, `^R` runs in the full terminal |
 | `i` | install picker: every executable in the project with profile, target, arch, age, install state; also updates the project's `.desktop` entry (shows a diff first, `d` to review it alone) |
-| `g` | git menu: status, diff, log, stage, commit, push/pull, branches, stash, `gh repo create` |
+| `g` | git menu: status, diff, log, stage, commit, push/pull, branches, stash, `gh repo create`; `g r` makes a release: bumps the version in `Cargo.toml` / `package.json` / `pyproject.toml` (and the lock file), commits it on main or through a PR (merged right away, or, when `main` requires checks or reviews or CI runs on PRs, left for you to merge on GitHub once CI passes; the next `g r` then tags it), tags `vX.Y.Z`, pushes the tag and watches the release workflow it starts, or runs `gh release create` when there is none; `g R` lists releases and CI runs |
 | `:` / `!` | run a shell command / open your shell here |
 | `x` | kill the shown task, or close its tab once it's done |
 | `[` `]` | previous / next output tab |
