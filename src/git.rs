@@ -12,6 +12,9 @@ use crate::form::{Field, Form, FormKind};
 
 pub struct GitInfo {
     pub root: PathBuf,
+    /// This worktree's git dir (HEAD, index) and the one shared by all worktrees (refs).
+    git_dir: PathBuf,
+    common_dir: PathBuf,
     pub branch: String,
     pub upstream: bool,
     pub ahead: u32,
@@ -23,6 +26,17 @@ pub struct GitInfo {
 }
 
 impl GitInfo {
+    /// Files git rewrites when HEAD, the index or a branch moves (commit, checkout,
+    /// reset, fetch, push, pull). Watched together with `refs_dir`.
+    pub fn state_files(&self) -> Vec<PathBuf> {
+        let (g, c) = (&self.git_dir, &self.common_dir);
+        vec![g.join("HEAD"), g.join("index"), g.join("logs/HEAD"), g.join("FETCH_HEAD"), c.join("packed-refs")]
+    }
+
+    pub fn refs_dir(&self) -> PathBuf {
+        self.common_dir.join("refs")
+    }
+
     pub fn dirty(&self) -> bool {
         !self.files.is_empty()
     }
@@ -78,13 +92,19 @@ pub fn diff(path: &Path) -> Option<Vec<String>> {
 }
 
 pub fn status(cwd: &Path) -> Option<GitInfo> {
-    let root = git(cwd, &["rev-parse", "--show-toplevel"])?;
-    let root = PathBuf::from(String::from_utf8_lossy(&root).trim());
+    let dirs = git(cwd, &["rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"])?;
+    let dirs = String::from_utf8_lossy(&dirs);
+    let mut dirs = dirs.lines().map(PathBuf::from);
+    let (root, git_dir) = (dirs.next()?, dirs.next()?);
+    // Printed relative to `cwd` unless it's elsewhere (worktrees).
+    let common_dir = cwd.join(dirs.next()?);
     let raw = git(cwd, &["status", "--porcelain=v1", "-b", "-z", "-unormal"])?;
     let raw = String::from_utf8_lossy(&raw);
 
     let mut info = GitInfo {
         root,
+        git_dir,
+        common_dir,
         branch: String::new(),
         upstream: false,
         ahead: 0,

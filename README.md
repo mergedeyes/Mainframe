@@ -9,7 +9,7 @@ mainframe [DIR]
 
 The file browser fills the screen; an output pane opens underneath when something runs.
 Starting a task while another runs opens it in a new output tab, so a dev server can keep going while you build.
-The file list and git markers refresh by themselves when files change elsewhere.
+The file list, git markers and the branch badge (↑ ↓ ●) refresh by themselves when something changes elsewhere: files anywhere in the repo, commits, checkouts, fetch, push and pull, also in linked worktrees.
 Press `?` inside for all keys.
 
 ## Keys

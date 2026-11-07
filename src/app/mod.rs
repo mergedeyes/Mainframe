@@ -33,8 +33,11 @@ use crate::{
     history::History,
     line::{Edit, LineEdit},
     project::{self, Op, Plan, Project, quote},
-    watch,
+    watch::{self, Watcher},
 };
+
+/// How often the whole worktree is walked for edits outside the current directory.
+const REPO_WATCH_INTERVAL: Duration = Duration::from_secs(2);
 
 pub enum Mode {
     Normal,
@@ -151,7 +154,11 @@ pub struct App {
     git_rx: Receiver<(u64, Option<GitInfo>)>,
     /// Last look at the current directory, to notice changes made elsewhere.
     dir_fp: (PathBuf, u64),
+    /// Last look at the repo's HEAD, index and refs (keyed by repo root).
+    git_fp: Option<(PathBuf, u64)>,
     dir_checked: Instant,
+    /// Edits anywhere in the repo, so dirty markers outside this directory stay current.
+    repo_watch: Option<(PathBuf, Watcher)>,
 
     // Written by the UI so paging knows how tall things are.
     pub browser_height: u16,
@@ -191,7 +198,9 @@ impl App {
             git_tx,
             git_rx,
             dir_fp: (PathBuf::new(), 0),
+            git_fp: None,
             dir_checked: Instant::now(),
+            repo_watch: None,
             browser_height: 10,
             pending: None,
             quit: false,
@@ -218,6 +227,9 @@ impl App {
         self.poll_watchers();
         self.poll_git();
         self.poll_dir();
+        if self.repo_watch.as_ref().is_some_and(|(_, w)| w.changed()) {
+            self.request_git();
+        }
         if let Some((_, _, at)) = &self.status
             && at.elapsed() > Duration::from_secs(6) {
                 self.status = None;
@@ -257,22 +269,30 @@ impl App {
             .map(|p| p.cmd);
     }
 
-    /// Reloads the file list when something else changed this directory (or the git index).
+    /// Notices changes made elsewhere: reloads the file list when this directory changed,
+    /// reruns `git status` when a commit, checkout, stage, fetch or push moved the repo.
     fn poll_dir(&mut self) {
         if self.dir_checked.elapsed() < Duration::from_secs(1) {
             return;
         }
         self.dir_checked = Instant::now();
-        let extra: Vec<PathBuf> = self
-            .git
-            .iter()
-            .flat_map(|g| [g.root.join(".git/index"), g.root.join(".git/HEAD")])
-            .collect();
-        let fp = watch::dir_fingerprint(&self.browser.cwd, &extra);
+        let fp = watch::dir_fingerprint(&self.browser.cwd);
         let (cwd, old) = std::mem::replace(&mut self.dir_fp, (self.browser.cwd.clone(), fp));
         if cwd == self.browser.cwd && old != fp {
             self.browser.reload();
             self.invalidate();
+        }
+
+        let now = self.git.as_ref().map(|g| {
+            let fp = watch::files_fingerprint(&g.state_files()).wrapping_add(watch::refs_fingerprint(&g.refs_dir()));
+            (g.root.clone(), fp)
+        });
+        let old = std::mem::replace(&mut self.git_fp, now.clone());
+        if let (Some(now), Some(old)) = (now, old)
+            && now.0 == old.0
+            && now.1 != old.1
+        {
+            self.request_git();
         }
     }
 
@@ -295,9 +315,19 @@ impl App {
             if generation == self.git_gen {
                 self.git = info;
                 self.git_pending = false;
+                self.sync_repo_watch();
                 // Whether the selection previews as a diff depends on the new status.
                 self.update_preview();
             }
+        }
+    }
+
+    /// Keeps the worktree watcher on the current repo. Not on a repo at $HOME: that's
+    /// everything, and dotfile repos mostly track files outside the subtrees you browse.
+    fn sync_repo_watch(&mut self) {
+        let root = self.git.as_ref().map(|g| g.root.clone()).filter(|r| *r != config::home());
+        if self.repo_watch.as_ref().map(|(r, _)| r) != root.as_ref() {
+            self.repo_watch = root.map(|r| (r.clone(), Watcher::with_interval(r, REPO_WATCH_INTERVAL)));
         }
     }
 
