@@ -91,8 +91,7 @@ pub fn detect(start: &Path) -> Option<Project> {
         if d == home {
             break;
         }
-        let kind = MARKERS.iter().find(|(_, files)| files.iter().any(|f| d.join(f).is_file())).map(|&(k, _)| k);
-        if let Some(kind) = kind {
+        if let Some(kind) = kind_at(d) {
             let name = match kind {
                 Kind::Cargo => cargo_name(d),
                 Kind::Python => targets::python_name(d),
@@ -105,6 +104,11 @@ pub fn detect(start: &Path) -> Option<Project> {
         dir = d.parent();
     }
     None
+}
+
+/// The build tool whose marker sits right in `dir` (no walking up).
+pub fn kind_at(dir: &Path) -> Option<Kind> {
+    MARKERS.iter().find(|(_, files)| files.iter().any(|f| dir.join(f).is_file())).map(|&(k, _)| k)
 }
 
 fn cargo_name(root: &Path) -> Option<String> {

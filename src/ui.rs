@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{AfterReview, App, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode, TaskPicker},
+    app::{AfterReview, App, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode, NotesView, ProjectPicker, TaskPicker},
     complete::Completer,
     form::{Form, FormKind},
     browser::{Preview, Sort, human_size},
@@ -15,6 +15,7 @@ use crate::{
     desktop::{self, Change, Status as DesktopStatus},
     git,
     install::{self, Installed},
+    notes::Item,
     task::Task,
 };
 
@@ -61,6 +62,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Install(picker) => draw_install(f, picker, f.area()),
         Mode::Tasks(picker) => draw_task_picker(f, picker, f.area()),
         Mode::Files(finder) => draw_file_finder(f, finder, f.area()),
+        Mode::Projects(picker) => draw_project_picker(f, picker, f.area()),
+        Mode::Notes(view) => draw_notes(f, view, f.area()),
         Mode::Form(form) => draw_form(f, form, f.area()),
         Mode::DesktopReview(review) => draw_desktop_review(f, review, f.area()),
         _ => {}
@@ -111,6 +114,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         if g.dirty() {
             badges.push(Span::styled(" ●", Style::new().fg(Color::Yellow)));
         }
+    }
+    if app.open_todos > 0 {
+        badges.push(Span::raw("  "));
+        badges.push(Span::styled(format!("☐ {}", app.open_todos), Style::new().fg(Color::Yellow)));
     }
 
     let logo = Span::styled(" ◆ MAINFRAME ", Style::new().bg(ACCENT).fg(Color::Black).bold());
@@ -503,6 +510,7 @@ const HELP: [&[HelpSection]; 3] = [
             ("^P", "find file in project"),
             ("c", "go to path / zoxide"),
             ("Z", "zoxide picker"),
+            ("J", "jump to project"),
             ("Tab ⇧Tab", "complete in prompts"),
             ("~", "home"),
             (".", "toggle hidden"),
@@ -520,6 +528,7 @@ const HELP: [&[HelpSection]; 3] = [
                 ("t / T", "test / all tasks"),
                 ("i", "install picker"),
                 ("g", "git menu"),
+                ("M", "project notes / todos"),
                 (":", "shell command"),
                 ("!", "open shell here"),
                 (",", "edit config"),
@@ -681,6 +690,134 @@ fn draw_file_finder(f: &mut Frame, finder: &mut FileFinder, area: Rect) {
         .highlight_symbol("▌ ")
         .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
     f.render_stateful_widget(list, list_area, &mut finder.state);
+}
+
+fn draw_project_picker(f: &mut Frame, picker: &mut ProjectPicker, area: Rect) {
+    let rect = popup(area, 90, picker.items.len() as u16 + 4);
+    f.render_widget(Clear, rect);
+    let block = pane(Line::from(format!(" projects in {} ", pretty_path(&picker.root)).bold()), true).title_bottom(
+        Line::from(" type to filter · Enter go · ^T notes · ^O VS Code · Esc close ").right_aligned().fg(DIM),
+    );
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+
+    f.render_widget(
+        Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(picker.filter.text.clone())]),
+        input,
+    );
+    f.render_widget(Line::from(format!("{} ", picker.visible.len())).right_aligned().fg(DIM), input);
+    f.set_cursor_position(Position::new((input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)), input.y));
+
+    // name · kind · todos · age, the name taking what's left.
+    let w = list_area.width.saturating_sub(2) as usize;
+    let name_w = w.saturating_sub(2 + 7 + 6 + 9);
+    let items: Vec<ListItem> = picker
+        .visible
+        .iter()
+        .map(|&i| {
+            let e = &picker.items[i];
+            let here = e.path == picker.current;
+            let (group, name) = e.name.rsplit_once('/').map_or(("", e.name.as_str()), |(g, n)| (g, n));
+            let shown = truncate(&e.name, name_w);
+            let pad = name_w.saturating_sub(shown.chars().count());
+            let mut spans = vec![Span::styled(if here { "● " } else { "  " }, Style::new().fg(ACCENT))];
+            if shown == e.name && !group.is_empty() {
+                spans.push(Span::styled(format!("{group}/"), Style::new().fg(DIM)));
+                spans.push(Span::styled(name.to_string(), Style::new().bold()));
+            } else {
+                spans.push(Span::styled(shown, Style::new().bold()));
+            }
+            let todos = match picker.todos[i] {
+                0 => String::new(),
+                n => format!("☐ {n}"),
+            };
+            spans.extend([
+                Span::raw(" ".repeat(pad)),
+                Span::styled(format!(" {:<6}", e.kind), Style::new().fg(Color::Yellow)),
+                Span::styled(format!("{todos:>5} "), Style::new().fg(Color::Yellow)),
+                Span::styled(format!("{:>9}", e.active.map(install::age).unwrap_or_default()), Style::new().fg(DIM)),
+            ]);
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    let list = List::new(items)
+        .highlight_symbol("▌")
+        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(list, list_area, &mut picker.state);
+}
+
+fn draw_notes(f: &mut Frame, view: &mut NotesView, area: Rect) {
+    let rect = popup(area, 100, (view.notes.items.len() as u16 + 4).max(10));
+    f.render_widget(Clear, rect);
+    let (open, done) = (view.notes.open(), view.notes.done());
+    let mut title = vec![Span::styled(format!(" notes · {} ", view.title), Style::new().bold())];
+    if open + done > 0 {
+        title.push(Span::styled(format!("{open} open · {done} done "), Style::new().fg(DIM)));
+    }
+    let keys = if view.editing.is_some() {
+        " Enter save · Esc cancel "
+    } else {
+        " a todo  n note  ⏎ edit  ␣ done  t ⇄note  d del  u undo  J K move  C clear done  E editor "
+    };
+    let block = pane(Line::from(title), true).title_bottom(Line::from(keys).right_aligned().fg(DIM));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    if view.notes.items.is_empty() {
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::default(),
+                Line::from("  nothing here yet".fg(DIM)),
+                Line::default(),
+                Line::from(vec!["  a".fg(ACCENT).bold(), " add a todo   ".fg(DIM), "n".fg(ACCENT).bold(), " add a note   ".fg(DIM), "E".fg(ACCENT).bold(), " write in the editor".fg(DIM)]),
+                Line::default(),
+                Line::from(format!("  saved in {}", pretty_path(&view.notes.path)).fg(DIM)),
+            ]),
+            inner,
+        );
+        return;
+    }
+
+    let editing = view.editing.as_ref().map(|e| e.index);
+    let items: Vec<ListItem> = view
+        .notes
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let (lead, lead_style) = match item {
+                Item::Todo { done: false, indent, .. } => (format!("{indent}☐ "), Style::new().fg(Color::Yellow)),
+                Item::Todo { done: true, indent, .. } => (format!("{indent}☑ "), Style::new().fg(Color::Green)),
+                Item::Note(_) => ("  ".into(), Style::new()),
+            };
+            let text = match &view.editing {
+                Some(e) if editing == Some(i) => Span::raw(e.input.text.clone()),
+                _ => match item {
+                    Item::Todo { done: true, text, .. } => Span::styled(text.clone(), Style::new().fg(DIM).crossed_out()),
+                    Item::Todo { text, .. } => Span::raw(text.clone()),
+                    Item::Note(text) if text.starts_with('#') => Span::styled(text.clone(), Style::new().fg(ACCENT).bold()),
+                    Item::Note(text) => Span::styled(text.clone(), Style::new().fg(Color::Gray)),
+                },
+            };
+            ListItem::new(Line::from(vec![Span::styled(lead, lead_style), text]))
+        })
+        .collect();
+    let list = List::new(items)
+        .highlight_symbol("▌ ")
+        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)));
+    f.render_stateful_widget(list, inner, &mut view.state);
+
+    // The cursor sits in the line being edited.
+    if let (Some(e), Some(sel)) = (&view.editing, view.state.selected()) {
+        let row = sel.saturating_sub(view.state.offset()) as u16;
+        let lead = match &view.notes.items[e.index] {
+            Item::Todo { indent, .. } => indent.chars().count() + 2,
+            Item::Note(_) => 2,
+        };
+        let x = inner.x + 2 + lead as u16 + e.input.col() as u16;
+        f.set_cursor_position(Position::new(x.min(inner.right().saturating_sub(1)), inner.y + row));
+    }
 }
 
 fn draw_task_picker(f: &mut Frame, picker: &mut TaskPicker, area: Rect) {

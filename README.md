@@ -19,6 +19,8 @@ Press `?` inside for all keys.
 | `j k` / arrows, `h l` | move, parent, enter |
 | `Enter` | enter dir / edit text file / run executable |
 | `/` · `c` · `Z` · `~` · `.` | filter · go to path or zoxide keywords · zoxide picker · home · toggle hidden |
+| `J` | jump to a project in your projects folder (`~/Projekte`, `~/Projects`, … or `projects_dir`): most recently active first, with kind and open todos; group folders like `Games/` are opened up into their projects; type to filter, `Enter` goes there, `^T` its notes, `^O` VS Code |
+| `M` | notes and todos for the project you're in: `a` todo, `n` note line, `Enter` edit, `Space` done, `t` todo ⇄ note, `d` delete, `u` undo, `J K` move, `C` clear done, `E` the whole file in the editor. The header shows open todos (`☐ 3`) |
 | `Ctrl-P` | fuzzy-find any file in the repo / project (`git ls-files`, so ignored files stay out); `Enter` shows it in the list, `^E` edits it |
 | `e` | edit in nano (configurable) |
 | `o` / `O` | open file / whole project in VS Code |
@@ -42,6 +44,9 @@ Press `?` inside for all keys.
 | `S` | sort by name, newest first (shows ages) or largest first |
 | `,` | edit config (custom key-bound commands live there) |
 
+Notes are Markdown (`- [ ]` / `- [x]` lines are todos, the rest is notes) in
+`~/.local/share/mainframe/notes/`, one file per project, so they never show up in `git status`.
+
 In `:`, ↑↓ walk the command history (kept in `~/.local/state/mainframe/history`), narrowed to
 what you typed before pressing ↑.
 
@@ -59,7 +64,7 @@ Use `R`, `!` or an `interactive = true` custom action for those.
 ## Config
 
 `~/.config/mainframe/config.toml`. Press `,` to create and open it. It has editor, VS Code
-command, install dir, when to notify about finished tasks (`notify_after`, seconds), per-extension
+command, install dir, projects folder (`projects_dir`), when to notify about finished tasks (`notify_after`, seconds), per-extension
 runners and custom actions:
 
 ```toml

@@ -189,6 +189,10 @@ impl App {
         }
         self.browser.reload();
         self.invalidate();
+        if let Some((root, title)) = self.reopen_notes.take() {
+            self.open_notes(root, title);
+            self.refresh_todo_count();
+        }
     }
 
     // ── zoxide ─────────────────────────────────────────────────────────────

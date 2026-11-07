@@ -24,6 +24,10 @@ vscode = "code"
 # Where `i` copies standalone executables to.
 install_dir = "~/.local/bin"
 
+# The folder `J` lists projects from. Empty: the first of ~/Projekte, ~/Projects,
+# ~/projects, ~/Code, ~/code, ~/dev, ~/src, ~/repos that exists.
+projects_dir = ""
+
 show_hidden = true
 preview = true
 
@@ -71,6 +75,7 @@ pub struct Config {
     pub editor: String,
     pub vscode: String,
     pub install_dir: String,
+    pub projects_dir: String,
     pub show_hidden: bool,
     pub preview: bool,
     pub zoxide: bool,
@@ -86,6 +91,7 @@ impl Default for Config {
             editor: "nano".into(),
             vscode: "code".into(),
             install_dir: "~/.local/bin".into(),
+            projects_dir: String::new(),
             show_hidden: true,
             preview: true,
             zoxide: true,

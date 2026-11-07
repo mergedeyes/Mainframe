@@ -5,6 +5,8 @@ mod file_finder;
 mod files;
 mod git_menu;
 mod installer;
+mod notes_view;
+mod project_picker;
 mod prompt;
 mod task_picker;
 mod tasks;
@@ -21,6 +23,8 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub use file_finder::FileFinder;
 pub use installer::{AfterReview, DesktopReview, InstallPicker};
+pub use notes_view::NotesView;
+pub use project_picker::ProjectPicker;
 pub use task_picker::TaskPicker;
 pub use tasks::Tab;
 
@@ -32,7 +36,9 @@ use crate::{
     git::{self, GIT, GitInfo},
     history::History,
     line::{Edit, LineEdit},
+    notes,
     project::{self, Op, Plan, Project, quote},
+    projects,
     watch::{self, Watcher},
 };
 
@@ -57,6 +63,8 @@ pub enum Mode {
     Install(InstallPicker),
     Tasks(TaskPicker),
     Files(FileFinder),
+    Projects(ProjectPicker),
+    Notes(NotesView),
     Form(Form),
     DesktopReview(DesktopReview),
 }
@@ -168,6 +176,11 @@ pub struct App {
     /// zoxide is installed and enabled in the config.
     zoxide: bool,
     history: History,
+    /// Whose notes `M` opens from here, and how many of its todos are open (header badge).
+    pub notes_root: PathBuf,
+    pub open_todos: usize,
+    /// `E` in the notes view: open them again once the editor closes.
+    reopen_notes: Option<(PathBuf, String)>,
 }
 
 impl App {
@@ -206,6 +219,9 @@ impl App {
             quit: false,
             zoxide: false,
             history: History::load(),
+            notes_root: PathBuf::new(),
+            open_todos: 0,
+            reopen_notes: None,
         };
         app.zoxide = app.config.zoxide && project::which("zoxide").is_some();
         app.browser.select_first();
@@ -260,6 +276,7 @@ impl App {
             let _ = env::set_current_dir(&self.browser.cwd);
             self.project = project::detect(&self.browser.cwd);
             self.request_git();
+            self.update_notes_root();
         }
         self.sel_key = Some(sel);
         self.update_preview();
@@ -310,11 +327,27 @@ impl App {
         });
     }
 
+    /// Recomputed whenever the directory changes. The git root counts when the projects
+    /// folder doesn't place you; `git status` answers later, so it's redone then too.
+    fn update_notes_root(&mut self) {
+        let dir = projects::dir(&self.config);
+        self.notes_root = projects::owner(&self.browser.cwd, dir.as_deref(), self.git.as_ref(), self.project.as_ref());
+        self.refresh_todo_count();
+    }
+
+    pub(super) fn refresh_todo_count(&mut self) {
+        self.open_todos = notes::open_count(&self.notes_root);
+    }
+
     fn poll_git(&mut self) {
         while let Ok((generation, info)) = self.git_rx.try_recv() {
             if generation == self.git_gen {
+                let root_changed = info.as_ref().map(|g| &g.root) != self.git.as_ref().map(|g| &g.root);
                 self.git = info;
                 self.git_pending = false;
+                if root_changed {
+                    self.update_notes_root();
+                }
                 self.sync_repo_watch();
                 // Whether the selection previews as a diff depends on the new status.
                 self.update_preview();
@@ -362,6 +395,8 @@ impl App {
             Mode::Install(_) => self.key_install(key),
             Mode::Tasks(_) => self.key_task_picker(key),
             Mode::Files(_) => self.key_file_finder(key),
+            Mode::Projects(_) => self.key_project_picker(key),
+            Mode::Notes(_) => self.key_notes(key),
             Mode::Form(_) => self.key_form(key),
             Mode::DesktopReview(_) => self.key_desktop_review(key),
             Mode::Normal => self.key_normal(key),
@@ -442,6 +477,8 @@ impl App {
             }
             KeyCode::Char('c') => self.prompt(PromptKind::Cd, ""),
             KeyCode::Char('Z') => self.zoxide_pick(),
+            KeyCode::Char('J') => self.open_project_picker(),
+            KeyCode::Char('M') => self.open_current_notes(),
 
             // actions
             KeyCode::Char('e') => self.edit_selected(),
