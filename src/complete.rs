@@ -101,11 +101,8 @@ impl Completer {
         if n == 0 {
             return;
         }
-        if let Some(sel) = self.selected {
-            let next = if forward { (sel + 1) % n } else { (sel + n - 1) % n };
-            self.selected = Some(next);
-            self.replace(input, next);
-            return;
+        if self.selected.is_some() {
+            return self.step(input, forward);
         }
         let token_len = input[self.start..].chars().count();
         if n == 1 {
@@ -128,9 +125,24 @@ impl Completer {
             self.update(input, false);
             return;
         }
-        let first = if forward { 0 } else { n - 1 };
-        self.selected = Some(first);
-        self.replace(input, first);
+        self.step(input, forward);
+    }
+
+    /// Arrows: move the highlight through the list right away, without
+    /// completing a common prefix or descending into directories first.
+    pub fn step(&mut self, input: &mut String, forward: bool) {
+        let n = self.items.len();
+        if n == 0 {
+            return;
+        }
+        let next = match self.selected {
+            Some(sel) if forward => (sel + 1) % n,
+            Some(sel) => (sel + n - 1) % n,
+            None if forward => 0,
+            None => n - 1,
+        };
+        self.selected = Some(next);
+        self.replace(input, next);
     }
 
     fn replace(&self, input: &mut String, i: usize) {

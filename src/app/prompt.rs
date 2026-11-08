@@ -42,8 +42,9 @@ impl App {
         match key.code {
             KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Char('c') if ctrl => self.mode = Mode::Normal,
-            // In `:` the arrows walk the history, narrowed to what was typed before.
-            KeyCode::Up | KeyCode::Down if matches!(kind, PromptKind::Command) => {
+            // In `:` the arrows walk the history, narrowed to what was typed before,
+            // unless the completion dropdown is open: then they move through it.
+            KeyCode::Up | KeyCode::Down if matches!(kind, PromptKind::Command) && !has_items => {
                 let (pos, prefix) = browsing.take().unwrap_or_else(|| (None, input.text.clone()));
                 let next = match key.code {
                     KeyCode::Up => self.history.older(&prefix, pos).or(pos),
@@ -62,10 +63,14 @@ impl App {
                 if completer.is_some() && (has_items || matches!(key.code, KeyCode::Tab | KeyCode::BackTab)) =>
             {
                 // Completion works on the word before the cursor and keeps the rest.
+                // Tab completes shell-style; arrows just move the highlight.
                 let forward = matches!(key.code, KeyCode::Tab | KeyCode::Down);
                 if let Some(c) = completer.as_mut() {
                     let mut head = input.head().to_string();
-                    c.cycle(&mut head, forward);
+                    match key.code {
+                        KeyCode::Up | KeyCode::Down => c.step(&mut head, forward),
+                        _ => c.cycle(&mut head, forward),
+                    }
                     input.replace_head(head);
                 }
             }
