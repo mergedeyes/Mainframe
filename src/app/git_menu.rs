@@ -1,6 +1,6 @@
 //! The `g` menu and the `gh repo create` form it opens.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{
     App, Confirmed, Level, Mode, PromptKind,
@@ -135,6 +135,12 @@ impl App {
 
     pub(super) fn key_form(&mut self, key: KeyEvent) {
         let Mode::Form(form) = &mut self.mode else { return };
+        if matches!(form.kind, FormKind::NewProject)
+            && key.code == KeyCode::Char('t')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            return self.edit_claude_template();
+        }
         match form.key(key) {
             FormEvent::None => {}
             FormEvent::Cancel => {
@@ -157,6 +163,11 @@ impl App {
                     }
                     FormKind::Deploy { .. } => {
                         if !self.submit_deploy_form(&form) {
+                            self.mode = Mode::Form(form);
+                        }
+                    }
+                    FormKind::NewProject => {
+                        if !self.submit_new_project(&form) {
                             self.mode = Mode::Form(form);
                         }
                     }

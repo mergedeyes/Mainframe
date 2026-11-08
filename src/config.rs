@@ -70,6 +70,9 @@ notify_after = 10
 #
 # Settings per project (deploy targets for D, actions only for that project) live in
 # ~/.config/mainframe/projects/: press D in a project, then e.
+#
+# New projects (J, then ^G) get their CLAUDE.md from ~/.config/mainframe/CLAUDE.md
+# when it exists, else from the built-in template; ^T in that form edits it.
 "#;
 
 #[derive(Debug, Deserialize)]

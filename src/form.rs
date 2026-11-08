@@ -63,6 +63,8 @@ pub enum FormKind {
     Release(Box<crate::release::Ctx>),
     /// A new deploy target for the project at `root`; `taken` are the names already used.
     Deploy { root: std::path::PathBuf, taken: Vec<String> },
+    /// A new project folder (`J`, then `^G`).
+    NewProject,
 }
 
 pub struct Form {

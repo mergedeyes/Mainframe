@@ -515,7 +515,7 @@ const HELP: [&[HelpSection]; 3] = [
             ("^P", "find file in project"),
             ("c", "go to path / zoxide"),
             ("Z", "zoxide picker"),
-            ("J", "jump to project"),
+            ("J", "jump to project · ^G new"),
             ("Tab ⇧Tab", "complete in prompts"),
             ("~", "home"),
             (".", "toggle hidden"),
@@ -702,7 +702,7 @@ fn draw_project_picker(f: &mut Frame, picker: &mut ProjectPicker, area: Rect) {
     let rect = popup(area, 90, picker.items.len() as u16 + 4);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(format!(" projects in {} ", pretty_path(&picker.root)).bold()), true).title_bottom(
-        Line::from(" type to filter · Enter go · ^T notes · ^O VS Code · Esc close ").right_aligned().fg(DIM),
+        Line::from(" type to filter · Enter go · ^T notes · ^O VS Code · ^G new · Esc close ").right_aligned().fg(DIM),
     );
     let inner = block.inner(rect);
     f.render_widget(block, rect);
@@ -1094,6 +1094,7 @@ fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
         FormKind::Deploy { root, .. } => {
             (crate::app::deploy_from_form(form).summary(root), "save", "D then Enter will", ("  ·  ", "  ·  "))
         }
+        FormKind::NewProject => (crate::scaffold::steps(form), "create", "will", ("  ·  ", "  ·  ")),
     };
     let w = 92.min(area.width.saturating_sub(2));
     let mut cmd = vec![Line::from(format!("  {heading}").fg(DIM))];

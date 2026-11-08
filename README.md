@@ -25,7 +25,7 @@ Press `?` inside for all keys.
 | `j k` / arrows, `h l` | move, parent, enter |
 | `Enter` | enter dir / edit text file / run executable |
 | `/` · `c` · `Z` · `~` · `.` | filter · go to path or zoxide keywords · zoxide picker · home · toggle hidden |
-| `J` | jump to a project in your projects folder (`~/Projekte`, `~/Projects`, … or `projects_dir`): most recently active first, with kind, running tasks and open todos; group folders like `Games/` are opened up into their projects; type to filter, `Enter` goes there, `^T` its notes, `^O` VS Code |
+| `J` | jump to a project in your projects folder (`~/Projekte`, `~/Projects`, … or `projects_dir`): most recently active first, with kind, running tasks and open todos; group folders like `Games/` are opened up into their projects; type to filter, `Enter` goes there, `^T` its notes, `^O` VS Code, `^G` makes a new project (see below) |
 | `M` | notes and todos for the project you're in: `a` todo, `n` note line, `Enter` edit, `Space` checks a todo off, `t` todo ⇄ note, `d` delete, `u` undo, `J K` move, `C` clears checked ones, `E` the whole file in the editor, `Esc` closes. The header shows open todos (`☐ 3`) |
 | `Ctrl-P` | fuzzy-find any file in the repo / project (`git ls-files`, so ignored files stay out); `Enter` shows it in the list, `^E` edits it |
 | `e` | edit in nano (configurable) |
@@ -67,6 +67,18 @@ Meson, Make, just, and single files
 
 Background tasks have no terminal, so anything asking for a password fails fast instead of hanging.
 Use `R`, `!` or an `interactive = true` custom action for those.
+
+## New projects
+
+`^G` in the `J` picker asks for a name, a location (the projects folder, or a group folder in it like
+`Games/`), a stack (none, rust, node, python) and whether to write a CLAUDE.md. It creates the folder,
+runs `git init -b main` and goes there. The CLAUDE.md is local only: it is listed in
+`.git/info/exclude`, so it never shows up in `git status` or gets committed.
+
+The CLAUDE.md comes from a built-in template, or from `~/.config/mainframe/CLAUDE.md` when that file
+exists. `^T` in the form opens that file in the editor, copying the built-in template there first.
+In the template, `{name}` becomes the folder name, and lines between `<!-- if rust -->` and
+`<!-- end -->` (likewise `node`, `python`, `none`) only stay when that stack is picked.
 
 ## Config
 

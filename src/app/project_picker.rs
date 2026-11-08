@@ -1,18 +1,23 @@
-//! `J`: every project in the projects folder, most recently active first; jump to one.
+//! `J`: every project in the projects folder, most recently active first; jump to one,
+//! or make a new one (`^G`).
 
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     widgets::ListState,
 };
 
-use super::{App, Level, Mode};
+use super::{App, Foreground, Level, Mode};
 use crate::{
-    config, fuzzy,
+    config,
+    form::{Field, Form, FormKind},
+    fuzzy,
     line::{Edit, LineEdit},
     notes,
+    project::quote,
     projects::{self, Entry},
+    scaffold,
 };
 
 pub struct ProjectPicker {
@@ -61,10 +66,8 @@ impl App {
             };
             return self.set_status(msg, Level::Err);
         };
+        // An empty list still opens: ^G makes the first project.
         let items = projects::scan(&root);
-        if items.is_empty() {
-            return self.set_status(format!("no projects in {}", config::pretty_path(&root)), Level::Info);
-        }
         let todos = items.iter().map(|e| notes::open_count(&e.path)).collect();
         let running = items.iter().map(|e| self.running_in(&e.path)).collect();
         let mut picker = ProjectPicker {
@@ -99,6 +102,10 @@ impl App {
             KeyCode::Enter => self.pick_project(Pick::Go),
             KeyCode::Char('t') if ctrl => self.pick_project(Pick::Notes),
             KeyCode::Char('o') if ctrl => self.pick_project(Pick::VsCode),
+            KeyCode::Char('g') if ctrl => {
+                let root = picker.root.clone();
+                self.new_project_form(&root);
+            }
             _ => {
                 if picker.filter.key(key) == Edit::Changed {
                     picker.apply_filter();
@@ -121,6 +128,88 @@ impl App {
                 self.set_status(format!("opened {} in VS Code", e.name), Level::Ok);
             }
         }
+    }
+}
+
+impl App {
+    fn new_project_form(&mut self, root: &std::path::Path) {
+        self.mode = Mode::Form(Form {
+            kind: FormKind::NewProject,
+            title: " new project ".into(),
+            fields: vec![
+                Field::text("name", "", "folder name"),
+                Field::dir("location", config::pretty_path(root), "Tab completes · a group folder like Games/ works too"),
+                Field::choice("stack", scaffold::STACKS, 0, "picks the checks in CLAUDE.md"),
+                Field::choice("CLAUDE.md", &["yes", "no"], 0, "local only, listed in .git/info/exclude"),
+            ],
+            step: 0,
+            note: Some(template_note()),
+            completer: None,
+        });
+    }
+
+    /// Makes the project the form describes and goes there. False keeps the form open.
+    pub(super) fn submit_new_project(&mut self, form: &Form) -> bool {
+        let name = form.get("name").trim();
+        let location = config::expand_tilde(form.get("location").trim());
+        let dir = match scaffold::target(&location, name) {
+            Ok(dir) => dir,
+            Err(e) => {
+                self.set_status(e, Level::Err);
+                return false;
+            }
+        };
+        let claude_md = (form.get("CLAUDE.md") == "yes")
+            .then(|| scaffold::render(&scaffold::template(), name, form.get("stack")));
+        let res = scaffold::create(&dir, claude_md.as_deref());
+        // The folder exists even when a later step failed; going there shows what's in it.
+        if dir.is_dir() {
+            self.browser.cd(dir.clone());
+            self.invalidate();
+        }
+        match res {
+            Ok(()) => {
+                let with = if claude_md.is_some() { " with a local CLAUDE.md" } else { "" };
+                self.set_status(format!("created {} — git repo on main{with}", config::pretty_path(&dir)), Level::Ok);
+            }
+            Err(e) => self.set_status(e, Level::Err),
+        }
+        true
+    }
+
+    /// `^T` in the new-project form: the CLAUDE.md template in the editor, copied from the
+    /// built-in one first if there's no file yet. The form stays open underneath.
+    pub(super) fn edit_claude_template(&mut self) {
+        let path = scaffold::template_path();
+        if !path.exists() {
+            let created = path
+                .parent()
+                .map_or(Ok(()), fs::create_dir_all)
+                .and_then(|_| fs::write(&path, scaffold::CLAUDE_MD));
+            if let Err(e) = created {
+                return self.set_status(format!("can't create {}: {e}", path.display()), Level::Err);
+            }
+        }
+        if let Mode::Form(form) = &mut self.mode {
+            form.note = Some(template_note());
+        }
+        self.pending = Some(Foreground {
+            cmd: format!("{} {}", self.config.editor, quote(&path)),
+            cwd: self.browser.cwd.clone(),
+            wait: false,
+            then_reload_config: false,
+            cd_to_output: false,
+        });
+    }
+}
+
+/// Which template CLAUDE.md comes from, for the form's note line.
+fn template_note() -> String {
+    let path = config::pretty_path(&scaffold::template_path());
+    if scaffold::template_path().exists() {
+        format!("template: {path} · ^T edits it")
+    } else {
+        format!("template: built-in · ^T copies it to {path} to edit")
     }
 }
 
