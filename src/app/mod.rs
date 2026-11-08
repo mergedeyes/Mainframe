@@ -1,6 +1,7 @@
 //! App state and the key dispatch for the normal mode; each other mode lives in its own file.
 
 mod actions;
+mod deploy;
 mod file_finder;
 mod files;
 mod git_menu;
@@ -22,6 +23,7 @@ use std::{
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+pub use deploy::{DeployPicker, deploy_from_form};
 pub use file_finder::FileFinder;
 pub use installer::{AfterReview, DesktopReview, InstallPicker};
 pub use notes_view::NotesView;
@@ -41,6 +43,7 @@ use crate::{
     notes,
     project::{self, Op, Plan, Project, quote},
     projects,
+    settings::{Deploy, ProjectSettings},
     watch::{self, Watcher},
 };
 
@@ -69,6 +72,7 @@ pub enum Mode {
     Notes(NotesView),
     Form(Form),
     DesktopReview(DesktopReview),
+    Deploy(DeployPicker),
 }
 
 #[derive(Clone)]
@@ -105,6 +109,8 @@ impl PromptKind {
 pub enum Confirmed {
     Delete(Vec<PathBuf>),
     Task(Plan),
+    /// Put a deploy target's newest backup back (target, project root).
+    Rollback(Box<Deploy>, PathBuf),
 }
 
 
@@ -183,6 +189,11 @@ pub struct App {
     pub open_todos: usize,
     /// `E` in the notes view: open them again once the editor closes.
     reopen_notes: Option<(PathBuf, String)>,
+    /// The settings file of `notes_root` (deploy targets, project actions), and whose they are.
+    pub settings: ProjectSettings,
+    settings_root: PathBuf,
+    /// `e` in the deploy picker: open it again once the editor closes.
+    reopen_deploy: bool,
     /// The project whose output tabs are shown, and the other projects' tabs.
     pub workspace: Option<PathBuf>,
     workspaces: Workspaces,
@@ -227,6 +238,9 @@ impl App {
             notes_root: PathBuf::new(),
             open_todos: 0,
             reopen_notes: None,
+            settings: ProjectSettings::default(),
+            settings_root: PathBuf::new(),
+            reopen_deploy: false,
             workspace: None,
             workspaces: Workspaces::new(),
         };
@@ -342,6 +356,7 @@ impl App {
         let owner = projects::owner(&self.browser.cwd, dir.as_deref(), self.git.as_ref(), self.project.as_ref());
         self.notes_root = owner.clone().unwrap_or_else(|| self.browser.cwd.clone());
         self.refresh_todo_count();
+        self.load_settings(false);
         if let Some(root) = owner {
             self.switch_workspace(root);
         }
@@ -411,6 +426,7 @@ impl App {
             Mode::Notes(_) => self.key_notes(key),
             Mode::Form(_) => self.key_form(key),
             Mode::DesktopReview(_) => self.key_desktop_review(key),
+            Mode::Deploy(_) => self.key_deploy(key),
             Mode::Normal => self.key_normal(key),
         }
         if !self.show_output {
@@ -420,7 +436,13 @@ impl App {
     }
 
     fn key_normal(&mut self, key: KeyEvent) {
-        if let Some(action) = self.config.actions.iter().find(|a| a.matches(&key)).cloned() {
+        if let Some(d) = self.settings.deploy_for_key(&key).cloned() {
+            let root = self.settings_root.clone();
+            return self.run_deploy(&d, &root, deploy::Run::Deploy);
+        }
+        // The project's own actions win over the global ones.
+        let actions = self.settings.actions.iter().chain(&self.config.actions);
+        if let Some(action) = actions.into_iter().find(|a| a.matches(&key)).cloned() {
             self.custom_action(&action);
             return;
         }
@@ -503,6 +525,7 @@ impl App {
             KeyCode::Char('t') => self.run_op(Op::Test, false),
             KeyCode::Char('T') => self.open_task_picker(),
             KeyCode::Char('i') => self.open_install_picker(),
+            KeyCode::Char('D') => self.open_deploy(None),
             KeyCode::Char('g') => {
                 self.await_git();
                 self.mode = Mode::GitMenu;
@@ -655,6 +678,7 @@ impl App {
         match action {
             Confirmed::Delete(paths) => self.delete(&paths),
             Confirmed::Task(plan) => self.start_task(plan.cmd.replace(GIT, "git"), plan),
+            Confirmed::Rollback(d, root) => self.run_deploy(&d, &root, deploy::Run::Rollback),
         }
     }
 }

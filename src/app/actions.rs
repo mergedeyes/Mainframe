@@ -179,6 +179,8 @@ impl App {
                 self.browser.cd(dir);
             }
         }
+        // Whatever ran may have been an editor on the project's settings.
+        self.load_settings(true);
         if fg.then_reload_config {
             let (cfg, err) = Config::load();
             self.config = cfg;
@@ -189,6 +191,9 @@ impl App {
         }
         self.browser.reload();
         self.invalidate();
+        if std::mem::take(&mut self.reopen_deploy) {
+            self.open_deploy(None);
+        }
         if let Some((root, title)) = self.reopen_notes.take() {
             self.open_notes(root, title);
             self.refresh_todo_count();

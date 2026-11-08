@@ -15,6 +15,7 @@ mod notes;
 mod project;
 mod projects;
 mod release;
+mod settings;
 mod targets;
 mod task;
 mod ui;

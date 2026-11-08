@@ -155,6 +155,11 @@ impl App {
                         let cwd = ctx.root.clone();
                         self.start_task(label, Plan { cmd, cwd });
                     }
+                    FormKind::Deploy { .. } => {
+                        if !self.submit_deploy_form(&form) {
+                            self.mode = Mode::Form(form);
+                        }
+                    }
                     FormKind::GhRepoCreate => {
                         let source = config::expand_tilde(form.get("source"));
                         if !source.is_dir() {

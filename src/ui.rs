@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{AfterReview, App, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode, NotesView, ProjectPicker, TaskPicker},
+    app::{AfterReview, App, DeployPicker, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode, NotesView, ProjectPicker, TaskPicker},
     complete::Completer,
     form::{Form, FormKind},
     browser::{Preview, Sort, human_size},
@@ -66,6 +66,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Notes(view) => draw_notes(f, view, f.area()),
         Mode::Form(form) => draw_form(f, form, f.area()),
         Mode::DesktopReview(review) => draw_desktop_review(f, review, f.area()),
+        Mode::Deploy(picker) => draw_deploy(f, picker, f.area()),
         _ => {}
     }
 }
@@ -531,6 +532,7 @@ const HELP: [&[HelpSection]; 3] = [
                 ("b / B", "build / release build"),
                 ("t / T", "test / all tasks"),
                 ("i", "install picker"),
+                ("D", "deploy to a device"),
                 ("g", "git menu"),
                 ("M", "project notes / todos"),
                 (":", "shell command"),
@@ -973,6 +975,63 @@ fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
     f.render_widget(Paragraph::new(lines), d);
 }
 
+fn draw_deploy(f: &mut Frame, picker: &mut DeployPicker, area: Rect) {
+    let label = |s: &'static str| Span::styled(format!("  {s:<10}"), Style::new().fg(DIM));
+    let mut details = Vec::new();
+    if let Some(d) = picker.selected() {
+        for (i, step) in d.summary(&picker.root).into_iter().enumerate() {
+            details.push(Line::from(vec![label(if i == 0 { "does" } else { "" }), Span::raw(step)]));
+        }
+        let artifact = d.artifact_path(&picker.root);
+        let built = match std::fs::metadata(&artifact).and_then(|m| m.modified()) {
+            Ok(t) => Span::styled(format!("built {}", install::age(t)), Style::new().fg(Color::Green)),
+            Err(_) => Span::styled("not built yet", Style::new().fg(Color::Yellow)),
+        };
+        details.push(Line::from(vec![label("artifact"), built]));
+        let how = match (d.interactive, d.sudo) {
+            (true, _) => "in the terminal — ssh and sudo may ask for passwords",
+            (false, true) => "in the output pane — needs an ssh key and sudo without password",
+            (false, false) => "in the output pane — needs an ssh key without prompt",
+        };
+        details.push(Line::from(vec![label("runs"), Span::styled(how, Style::new().fg(DIM))]));
+    }
+    details.push(Line::from(vec![
+        label("settings"),
+        Span::styled(pretty_path(&crate::settings::file_for(&picker.root)), Style::new().fg(DIM)),
+    ]));
+
+    let rect = popup(area, 110, picker.targets.len() as u16 + details.len() as u16 + 4);
+    f.render_widget(Clear, rect);
+    let block = pane(Line::from(format!(" deploy {} ", picker.title).bold()), true).title_bottom(
+        Line::from(" Enter deploy · u roll back · l list backups · a add · e edit settings · Esc close ").right_aligned().fg(DIM),
+    );
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let [list_area, _, details_area] =
+        Layout::vertical([Constraint::Length(picker.targets.len() as u16), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+
+    let items: Vec<ListItem> = picker
+        .targets
+        .iter()
+        .map(|d| {
+            let mut spans = vec![
+                Span::styled(format!("{:<16}", truncate(&d.name, 16)), Style::new().fg(Color::Yellow).bold()),
+                Span::raw(format!("{:<30} ", truncate(&d.host, 30))),
+                Span::styled(d.remote_path.clone(), Style::new().fg(DIM)),
+            ];
+            if !d.key.is_empty() {
+                spans.push(Span::styled(format!("  [{}]", d.key), Style::new().fg(ACCENT)));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    let list = List::new(items)
+        .highlight_symbol("▌ ")
+        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(list, list_area, &mut picker.state);
+    f.render_widget(Paragraph::new(details), details_area);
+}
+
 fn draw_desktop_review(f: &mut Frame, review: &DesktopReview, area: Rect) {
     let plan = &review.plans[review.idx];
     let diff = match &plan.old {
@@ -1029,14 +1088,17 @@ fn draw_desktop_review(f: &mut Frame, review: &DesktopReview, area: Rect) {
 
 fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
     // One line per step; long ones wrap.
-    let (steps, verb) = match &form.kind {
-        FormKind::GhRepoCreate => (vec![crate::git::gh_repo_create_cmd(form)], "create"),
-        FormKind::Release(ctx) => (crate::release::steps(form, ctx), "release"),
+    let (steps, verb, heading, leads) = match &form.kind {
+        FormKind::GhRepoCreate => (vec![crate::git::gh_repo_create_cmd(form)], "create", "command", ("  $  ", "  && ")),
+        FormKind::Release(ctx) => (crate::release::steps(form, ctx), "release", "command", ("  $  ", "  && ")),
+        FormKind::Deploy { root, .. } => {
+            (crate::app::deploy_from_form(form).summary(root), "save", "D then Enter will", ("  ·  ", "  ·  "))
+        }
     };
     let w = 92.min(area.width.saturating_sub(2));
-    let mut cmd = vec![Line::from("  command".fg(DIM))];
+    let mut cmd = vec![Line::from(format!("  {heading}").fg(DIM))];
     for (i, step) in steps.iter().enumerate() {
-        cmd.extend(hang_wrap(if i == 0 { "  $  " } else { "  && " }, step, w.saturating_sub(7) as usize));
+        cmd.extend(hang_wrap(if i == 0 { leads.0 } else { leads.1 }, step, w.saturating_sub(7) as usize));
     }
     let rect = popup(area, w, form.fields.len() as u16 + 6 + cmd.len() as u16);
     f.render_widget(Clear, rect);

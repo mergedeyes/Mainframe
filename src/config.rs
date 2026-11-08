@@ -67,6 +67,9 @@ notify_after = 10
 # key = "F6"
 # name = "flash firmware"
 # cmd = "cargo run --release -- --flash {file}"
+#
+# Settings per project (deploy targets for D, actions only for that project) live in
+# ~/.config/mainframe/projects/: press D in a project, then e.
 "#;
 
 #[derive(Debug, Deserialize)]
@@ -122,12 +125,17 @@ pub struct Action {
 
 impl Action {
     pub fn matches(&self, key: &KeyEvent) -> bool {
-        parse_key(&self.key).is_some_and(|(code, mods)| {
-            // Shift is implied by the character itself for letters/symbols.
-            let pressed = key.modifiers - KeyModifiers::SHIFT;
-            key.code == code && pressed == mods
-        })
+        key_matches(&self.key, key)
     }
+}
+
+/// Whether `key` is the key written as `spec` ("F5", "ctrl-g", "Z", …).
+pub fn key_matches(spec: &str, key: &KeyEvent) -> bool {
+    parse_key(spec).is_some_and(|(code, mods)| {
+        // Shift is implied by the character itself for letters/symbols.
+        let pressed = key.modifiers - KeyModifiers::SHIFT;
+        key.code == code && pressed == mods
+    })
 }
 
 impl Config {
