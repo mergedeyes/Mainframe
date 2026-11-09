@@ -981,11 +981,15 @@ fn draw_deploy(f: &mut Frame, picker: &mut DeployPicker, area: Rect) {
     let label = |s: &'static str| Span::styled(format!("  {s:<10}"), Style::new().fg(DIM));
     let mut details = Vec::new();
     if let Some(d) = picker.selected() {
-        for (i, step) in d.summary(&picker.root).into_iter().enumerate() {
+        for (i, step) in d.summary(&picker.root, picker.keep_build).into_iter().enumerate() {
             details.push(Line::from(vec![label(if i == 0 { "does" } else { "" }), Span::raw(step)]));
         }
         let artifact = d.artifact_path(&picker.root);
         let built = match std::fs::metadata(&artifact).and_then(|m| m.modified()) {
+            // The file in the project folder isn't what gets deployed then.
+            _ if !d.from.trim().is_empty() => {
+                Span::styled(format!("built from {} on each deploy", d.from.trim()), Style::new().fg(Color::Green))
+            }
             Ok(t) => Span::styled(format!("built {}", install::age(t)), Style::new().fg(Color::Green)),
             Err(_) => Span::styled("not built yet", Style::new().fg(Color::Yellow)),
         };
@@ -1166,8 +1170,8 @@ fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
     let (steps, verb, heading, leads) = match &form.kind {
         FormKind::GhRepoCreate => (vec![crate::git::gh_repo_create_cmd(form)], "create", "command", ("  $  ", "  && ")),
         FormKind::Release(ctx) => (crate::release::steps(form, ctx), "release", "command", ("  $  ", "  && ")),
-        FormKind::Deploy { root, .. } => {
-            (crate::app::deploy_from_form(form).summary(root), "save", "D then Enter will", ("  ·  ", "  ·  "))
+        FormKind::Deploy { root, keep_build, .. } => {
+            (crate::app::deploy_from_form(form).summary(root, *keep_build), "save", "D then Enter will", ("  ·  ", "  ·  "))
         }
         FormKind::NewProject => (crate::scaffold::steps(form), "create", "will", ("  ·  ", "  ·  ")),
     };

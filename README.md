@@ -34,7 +34,7 @@ Press `?` inside for all keys.
 | `b` / `B` / `t` | build / release build / test |
 | `T` | task picker: the build tool's usual commands, cargo bins and examples, `go run ./cmd/…`, Python entry points, package.json scripts, make targets and just recipes — type to filter, `Enter` runs, `^R` runs in the full terminal |
 | `i` | install picker: every executable in the project with profile, target, arch, age, install state; also updates the project's `.desktop` entry (shows a diff first, `d` to review it alone) |
-| `D` | deploy to another machine (a Pi, a server): builds, copies the result over ssh and swaps it in for the binary there, keeping the old one as `<file>.bak-<date-time>`; `u` puts the newest backup back, `l` lists them, `a` adds a target, `e` edits the project's settings. With no target yet it asks for one, with guesses for a Pi (ARM build, `cross` if installed) |
+| `D` | deploy to another machine (a Pi, a server): builds (the project folder as it is, or with `from` a clean checkout of a branch like `main`), copies the result over ssh and swaps it in for the binary there, keeping the old one as `<file>.bak-<date-time>`; `u` puts the newest backup back, `l` lists them, `a` adds a target, `e` edits the project's settings. With no target yet it asks for one, with guesses for a Pi (ARM build, `cross` if installed) |
 | `C` | clean up the project you're in (or, outside one, every project below the folder you're in): what its build tools left lying around, with sizes — cargo's debug builds (all targets), the incremental cache alone, release builds, docs or all of `target`; `node_modules` and framework build folders; virtualenvs, `__pycache__` and tool caches; `zig-out`, CMake/Meson build trees, Go's build cache; and the project's own `clean` target. The same project in the repo's other worktrees is listed too, prefixed with the worktree's folder (`windows · debug builds`). Projects nested below (`app/src-tauri`, workspace members) and their worktrees count as well, plus stray cache folders (`CACHEDIR.TAG`, e.g. a `target` without its `Cargo.toml`); hidden folders, `node_modules`, `target` and venvs aren't walked into. Outside a project it takes everything below the folder, so in `~/Projekte` it lists every project. Folders git tracks files in are never offered. `Space` marks a row, `a` every row like it (all debug builds), `Enter` asks, then deletes in the output pane and reports what was freed on disk (measured with `df`, so after compression and snapshots). On a btrfs with compression, sizes show what it takes on disk (`~` estimated from a sample of its compressed parts, zstd as btrfs does it), since `du` and file sizes count it uncompressed |
 | `g` | git menu: status, diff, log, stage, commit, push/pull, branches, stash, `gh repo create`; `g W` removes another worktree of the repo (its branch stays; asks first, says if uncommitted changes would be lost, and takes you to the main checkout if you're inside it); `g B` pushes another local branch without switching to it (Tab completes, most recent first; to the remote it tracks, or to `origin` with upstream set); `g r` makes a release: bumps the version in `Cargo.toml` / `package.json` / `pyproject.toml` (and the lock file), commits it on main or through a PR (merged right away, or, when `main` requires checks or reviews or CI runs on PRs, left for you to merge on GitHub once CI passes; the next `g r` then tags it), tags `vX.Y.Z`, pushes the tag and watches the release workflow it starts, or runs `gh release create` when there is none; `g R` lists releases and CI runs |
 | `:` / `!` | run a shell command / open your shell here |
@@ -84,7 +84,8 @@ In the template, `{name}` becomes the folder name, and lines between `<!-- if ru
 ## Config
 
 `~/.config/mainframe/config.toml`. Press `,` to create and open it. It has editor, VS Code
-command, install dir, projects folder (`projects_dir`), when to notify about finished tasks (`notify_after`, seconds), per-extension
+command, install dir, projects folder (`projects_dir`), when to notify about finished tasks (`notify_after`, seconds), whether deploy
+builds of a branch keep their checkout (`keep_deploy_builds`, see below), per-extension
 runners and custom actions:
 
 ```toml
@@ -106,6 +107,7 @@ name = "pi"
 host = "pi@raspberrypi.local"          # anything ssh accepts, incl. ~/.ssh/config aliases
 remote_path = "/usr/local/bin/myapp"   # replaced in place, mode and owner kept
 build = "cross build --release --target aarch64-unknown-linux-gnu"   # "" skips it
+from = "main"       # optional: build this branch, not the folder as it is (see below)
 artifact = "target/aarch64-unknown-linux-gnu/release/myapp"
 sudo = true
 restart = "sudo systemctl restart myapp"   # optional, runs there afterwards
@@ -114,6 +116,15 @@ ssh = ""            # extra ssh options, e.g. "-p 2222"
 interactive = false # true: runs in the real terminal, for ssh / sudo passwords
 key = "F9"          # optional: deploy with one key
 ```
+
+With `from`, the build doesn't use your project folder: Mainframe checks that branch (or commit)
+out in a separate worktree under `~/.cache/mainframe/deploy/`, builds there and deploys that, so
+half-done edits on the branch you're working on never reach the device. It's your local branch
+(pull first for what's on GitHub, or use `from = "origin/main"` after a fetch). A project in a subfolder
+of its repo builds in the same subfolder there. Once the deploy is done (or failed), the checkout
+is removed with its build output; `keep_deploy_builds = true` in the main config keeps it, so the
+next deploy only rebuilds what changed, at the cost of the disk space. The new-target form asks
+for it as "from".
 
 The upload goes to `/tmp` first and the swap is a rename, so a running binary can be
 replaced. An identical binary is left alone (no extra backup). Deploys run in the output pane,

@@ -25,6 +25,8 @@ pub struct DeployPicker {
     pub title: String,
     pub targets: Vec<Deploy>,
     pub state: ListState,
+    /// keep_deploy_builds from the config, for the summary.
+    pub keep_build: bool,
 }
 
 impl DeployPicker {
@@ -72,6 +74,7 @@ impl App {
             root,
             targets,
             state: ListState::default().with_selected(Some(pos)),
+            keep_build: self.config.keep_deploy_builds,
         });
     }
 
@@ -137,7 +140,7 @@ impl App {
             return self.set_status(format!("deploy {}: {p} — D then e fixes it", d.name), Level::Err);
         }
         let (script, tag, label) = match what {
-            Run::Deploy => (d.script(root), "deploy", format!("deploy {}", d.name)),
+            Run::Deploy => (d.script(root, self.config.keep_deploy_builds), "deploy", format!("deploy {}", d.name)),
             Run::Rollback => (d.rollback_script(), "rollback", format!("roll back {}", d.name)),
             Run::Backups => (d.backups_script(), "backups", format!("backups on {}", d.name)),
         };
@@ -168,13 +171,14 @@ impl App {
                 .is_ok_and(|d| d.flatten().any(|e| e.file_name().to_string_lossy().starts_with("id_")));
         let note = (!has_key).then(|| "no ssh key found — ssh-keygen + ssh-copy-id <host>, or run it in the terminal".to_string());
         self.mode = Mode::Form(Form {
-            kind: FormKind::Deploy { root: root.clone(), taken },
+            kind: FormKind::Deploy { root: root.clone(), taken, keep_build: self.config.keep_deploy_builds },
             title: format!(" new deploy target · {} ", Self::project_title(&root)),
             fields: vec![
                 Field::text("name", name, "what the picker calls it"),
                 Field::text("host", "pi@raspberrypi.local", "user@host or an alias from ~/.ssh/config"),
                 Field::text("remote path", format!("/usr/local/bin/{}", guess.bin), "the file there that gets replaced"),
                 Field::text("build", guess.build, "runs in the project root · - for none"),
+                Field::text("from", "", "a branch to build, e.g. main, in a separate checkout · empty: this folder as it is"),
                 Field::text("artifact", guess.artifact, "the built file, relative to the project root"),
                 Field::choice("sudo", &["yes", "no"], 0, "replace it as root (needed for /usr/…)"),
                 Field::text("restart", "", "optional, runs there afterwards, e.g. sudo systemctl restart …"),
@@ -188,7 +192,7 @@ impl App {
 
     /// Saves the form's target and shows it in the picker. False keeps the form open.
     pub(super) fn submit_deploy_form(&mut self, form: &Form) -> bool {
-        let FormKind::Deploy { root, taken } = &form.kind else { return true };
+        let FormKind::Deploy { root, taken, .. } = &form.kind else { return true };
         let d = deploy_from_form(form);
         let problem = d.problem().or_else(|| taken.contains(&d.name).then(|| format!("there's a target named {} already", d.name)));
         if let Some(p) = problem {
@@ -209,11 +213,13 @@ impl App {
 /// The target the deploy form currently describes.
 pub fn deploy_from_form(form: &Form) -> Deploy {
     let build = form.get("build").trim();
+    let from = form.get("from").trim();
     Deploy {
         name: form.get("name").trim().to_string(),
         host: form.get("host").trim().to_string(),
         remote_path: form.get("remote path").trim().to_string(),
         build: if build == "-" { String::new() } else { build.to_string() },
+        from: from.to_string(),
         artifact: form.get("artifact").trim().to_string(),
         sudo: form.get("sudo") == "yes",
         restart: form.get("restart").trim().to_string(),

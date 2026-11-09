@@ -43,6 +43,11 @@ desktop_entries = "ask"
 # task that ran at least this many seconds finishes. 0 turns it off.
 notify_after = 10
 
+# Deploy targets with `from` (a branch to build, e.g. "main") build in a separate
+# checkout under ~/.cache/mainframe/deploy/. false removes it, build output included,
+# once the deploy is done; true keeps it, so the next deploy only rebuilds what changed.
+keep_deploy_builds = false
+
 # Override or add run commands per file extension (used by `r` / `R`).
 [runners]
 # py = "python3 {file}"
@@ -87,6 +92,7 @@ pub struct Config {
     pub zoxide: bool,
     pub desktop_entries: DesktopMode,
     pub notify_after: u64,
+    pub keep_deploy_builds: bool,
     pub runners: HashMap<String, String>,
     pub actions: Vec<Action>,
 }
@@ -103,6 +109,7 @@ impl Default for Config {
             zoxide: true,
             desktop_entries: DesktopMode::Ask,
             notify_after: 10,
+            keep_deploy_builds: false,
             runners: HashMap::new(),
             actions: Vec::new(),
         }
@@ -175,6 +182,14 @@ pub fn state_dir() -> PathBuf {
     env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home().join(".local/state"))
+        .join("mainframe")
+}
+
+/// `$XDG_CACHE_HOME/mainframe`: things that can be thrown away, like deploy build checkouts.
+pub fn cache_dir() -> PathBuf {
+    env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".cache"))
         .join("mainframe")
 }
 
