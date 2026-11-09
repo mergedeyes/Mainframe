@@ -2,6 +2,7 @@
 
 use std::{
     collections::BTreeSet,
+    fs,
     path::PathBuf,
     sync::mpsc::{self, Receiver},
     thread,
@@ -15,10 +16,9 @@ use ratatui::{
 
 use super::{App, Confirmed, Level, Mode};
 use crate::{
-    browser::human_size,
     config,
     cleanup::{self, Item},
-    project::{self, Plan},
+    project::{self, Plan, quote},
 };
 
 pub struct CleanupPicker {
@@ -141,15 +141,19 @@ impl App {
         }
         let root = picker.root.clone();
         let what = cleanup::summary(&chosen);
-        // A size is only promised when every row was measured and none runs a tool.
-        let measured = chosen.iter().all(|i| i.size.is_some() && i.cmd.is_none());
-        let size = measured.then(|| cleanup::total(&chosen));
-        let mut steps: Vec<String> = chosen.iter().map(|i| i.command(&root)).collect();
-        steps.push(cleanup::done_line(&what, size));
-        let plan = Plan { cmd: steps.join(" && "), cwd: root };
+        // A size is only promised when every row was measured (a project's own clean target isn't).
+        let size = chosen.iter().all(|i| i.size.is_some()).then(|| cleanup::total(&chosen));
+        let steps: Vec<String> = chosen.iter().map(|i| i.command(&root)).collect();
+        // A script file, so the output pane shows one short command line.
+        let file = config::state_dir().join("cleanup").join(format!("{}.sh", config::pretty_path(&root).replace(|c: char| !c.is_ascii_alphanumeric(), "-")));
+        let written = file.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&file, cleanup::script(&steps, &what, size)));
+        if let Err(e) = written {
+            return self.set_status(format!("can't write {}: {e}", config::pretty_path(&file)), Level::Err);
+        }
+        let plan = Plan { cmd: format!("sh {}", quote(&file)), cwd: root };
         let label = if chosen.len() == 1 { format!("clean {what}") } else { format!("clean {} things", chosen.len()) };
         let sized = match size {
-            Some(n) => format!("{what} ({})", human_size(n)),
+            Some(u) => format!("{what} ({})", u.long()),
             None => what,
         };
         self.mode = Mode::Confirm { msg: format!("Delete {sized}? [y/N]"), action: Confirmed::Labeled(label, plan) };
