@@ -83,6 +83,7 @@ impl App {
             'C' => return self.prompt(PromptKind::Commit { all: true }, ""),
             'o' => return self.prompt(PromptKind::SwitchBranch, ""),
             'n' => return self.prompt(PromptKind::NewBranch, ""),
+            'B' => return self.prompt(PromptKind::PushBranch, ""),
             'e' => {
                 let cmd = format!("GIT_EDITOR={} git commit --amend", quote_str(&self.config.editor));
                 return self.foreground(Plan { cmd, cwd }, true);

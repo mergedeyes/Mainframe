@@ -26,6 +26,7 @@ impl App {
             PromptKind::NewDir => Some(Completer::new(complete::Kind::Dir, false)),
             PromptKind::Command => Some(Completer::new(complete::Kind::Shell, false)),
             PromptKind::SwitchBranch => Some(Completer::list(git::branches(&self.browser.cwd))),
+            PromptKind::PushBranch => Some(Completer::list(git::local_branches(&self.browser.cwd))),
             PromptKind::Commit { .. } | PromptKind::NewBranch => None,
         };
         // Prefilled inputs (rename) shouldn't pop a list until the user types.
@@ -138,6 +139,10 @@ impl App {
                 let cmd = format!("{GIT} switch -c {}", quote_str(&input));
                 self.start_task("git switch -c".into(), Plan { cmd, cwd });
             }
+            PromptKind::PushBranch => match git::push_branch_cmd(&cwd, input.trim()) {
+                Ok(cmd) => self.start_task(format!("git push {}", input.trim()), Plan { cmd, cwd }),
+                Err(e) => self.set_status(e, Level::Err),
+            },
             PromptKind::NewFile => {
                 let path = self.resolve(&input);
                 let res = path

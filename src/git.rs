@@ -8,7 +8,10 @@ use std::{
 
 use ratatui::style::Color;
 
-use crate::form::{Field, Form, FormKind};
+use crate::{
+    form::{Field, Form, FormKind},
+    project::quote_str,
+};
 
 pub struct GitInfo {
     pub root: PathBuf,
@@ -163,6 +166,33 @@ fn parse_branch(info: &mut GitInfo, head: &str) {
 }
 
 /// Local branches, then remote ones not checked out locally (without the remote prefix).
+/// Local branches, most recently committed to first.
+pub fn local_branches(cwd: &Path) -> Vec<String> {
+    git(cwd, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"])
+        .map(|raw| String::from_utf8_lossy(&raw).lines().map(String::from).collect())
+        .unwrap_or_default()
+}
+
+/// `git push` for a local branch other than (or the same as) the checked-out one, without
+/// switching to it: to the remote it tracks, or to origin with upstream set when it has none.
+pub fn push_branch_cmd(cwd: &Path, branch: &str) -> Result<String, String> {
+    if git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_none() {
+        return Err(format!("no local branch {branch}"));
+    }
+    let config = |key: &str| {
+        git(cwd, &["config", &format!("branch.{branch}.{key}")]).map(|o| String::from_utf8_lossy(&o).trim().to_string())
+    };
+    let b = quote_str(branch);
+    Ok(match (config("remote"), config("merge")) {
+        // "." tracks a local branch; pushing there would only move that branch.
+        (Some(remote), Some(merge)) if remote != "." => {
+            let to = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
+            format!("{GIT} push {} {b}:{}", quote_str(&remote), quote_str(to))
+        }
+        _ => format!("{GIT} push -u origin {b}"),
+    })
+}
+
 pub fn branches(cwd: &Path) -> Vec<String> {
     let Some(raw) = git(cwd, &["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"]) else {
         return Vec::new();
@@ -229,6 +259,7 @@ pub const MENU: &[(&str, &[MenuItem])] = &[
             item('f', "fetch"),
             item('p', "pull"),
             item('P', "push"),
+            item('B', "push another branch…"),
         ],
     ),
     (
@@ -337,4 +368,47 @@ pub fn gh_repo_create_cmd(form: &Form) -> String {
         cmd.push_str(" --push");
     }
     cmd
+}
+
+#[cfg(test)]
+mod push_tests {
+    use super::*;
+
+    /// Pushing another branch leaves the checkout alone and lands on the remote.
+    #[test]
+    fn pushes_a_branch_that_is_not_checked_out() {
+        let base = std::env::temp_dir().join(format!("mainframe-push-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (repo, remote) = (base.join("repo"), base.join("remote.git"));
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(dir).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        run(&base, &["init", "-q", "--bare", "remote.git"]);
+        run(&repo, &["init", "-q", "-b", "main"]);
+        run(&repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        run(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        run(&repo, &["switch", "-q", "-c", "feature"]);
+        run(&repo, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        run(&repo, &["switch", "-q", "main"]);
+
+        assert_eq!(local_branches(&repo).len(), 2);
+        assert!(push_branch_cmd(&repo, "nope").is_err());
+        let cmd = push_branch_cmd(&repo, "feature").unwrap().replace(GIT, "git");
+        assert_eq!(cmd, "git push -u origin feature");
+        let ok = Command::new("sh").arg("-c").arg(&cmd).current_dir(&repo).output().unwrap().status.success();
+
+        let head = git(&repo, &["branch", "--show-current"]).unwrap();
+        let on_remote = git(&remote, &["rev-parse", "feature"]).unwrap();
+        let local = git(&repo, &["rev-parse", "feature"]).unwrap();
+        // Now it tracks origin/feature, so the next push goes there by name.
+        let again = push_branch_cmd(&repo, "feature").unwrap().replace(GIT, "git");
+        std::fs::remove_dir_all(&base).unwrap();
+
+        assert!(ok);
+        assert_eq!(String::from_utf8_lossy(&head).trim(), "main");
+        assert_eq!(on_remote, local);
+        assert_eq!(again, "git push origin feature:feature");
+    }
 }
