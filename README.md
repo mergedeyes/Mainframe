@@ -25,7 +25,7 @@ Press `?` inside for all keys.
 | `j k` / arrows, `h l` | move, parent, enter |
 | `Enter` | enter dir / edit text file / run executable |
 | `/` · `c` · `Z` · `~` · `.` | filter · go to path or zoxide keywords · zoxide picker · home · toggle hidden |
-| `J` | jump to a project in your projects folder (`~/Projekte`, `~/Projects`, … or `projects_dir`): most recently active first, with kind, running tasks and open todos; group folders like `Games/` are opened up into their projects; type to filter, `Enter` goes there, `^T` its notes, `^O` VS Code, `^G` makes a new project (see below) |
+| `J` | jump to a project in your projects folder (`~/Projekte`, `~/Projects`, … or `projects_dir`): most recently active first, with kind, running tasks and open todos; group folders like `Games/` are opened up into their projects; type to filter, `Enter` goes there, `^T` its notes, `^O` VS Code, `^G` makes a new project, `^L` brings the CLAUDE.md preset into the selected one (see below) |
 | `M` | notes and todos for the project you're in: `a` todo, `n` note line, `Enter` edit, `Space` checks a todo off, `t` todo ⇄ note, `d` delete, `u` undo, `J K` move, `C` clears checked ones, `E` the whole file in the editor, `Esc` closes. The header shows open todos (`☐ 3`) |
 | `Ctrl-P` | fuzzy-find any file in the repo / project (`git ls-files`, so ignored files stay out); `Enter` shows it in the list, `^E` edits it |
 | `e` | edit in nano (configurable) |
@@ -80,6 +80,15 @@ The CLAUDE.md comes from a built-in template, or from `~/.config/mainframe/CLAUD
 exists. `^T` in the form opens that file in the editor, copying the built-in template there first.
 In the template, `{name}` becomes the folder name, and lines between `<!-- if rust -->` and
 `<!-- end -->` (likewise `node`, `python`, `none`) only stay when that stack is picked.
+
+For a project that exists already, `^L` in the `J` picker brings the same preset in, with the
+stacks its build files show (a Tauri app gets the rust and the node checks). Without any
+instructions yet (`CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`), it becomes
+the project's local CLAUDE.md. Otherwise it goes to `.claude/rules/mainframe-preset.md`, which
+Claude Code loads at its next start: that note asks Claude to merge the preset into the
+project's own instructions (those win where they disagree, and Claude points out each
+conflict), delete the note and tell you what changed. Git ignores whatever `^L` writes
+(`info/exclude`).
 
 ## Config
 

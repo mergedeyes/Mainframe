@@ -704,7 +704,7 @@ fn draw_project_picker(f: &mut Frame, picker: &mut ProjectPicker, area: Rect) {
     let rect = popup(area, 90, picker.items.len() as u16 + 4);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(format!(" projects in {} ", pretty_path(&picker.root)).bold()), true).title_bottom(
-        Line::from(" type to filter · Enter go · ^T notes · ^O VS Code · ^G new · Esc close ").right_aligned().fg(DIM),
+        Line::from(" type to filter · Enter go · ^T notes · ^O VS Code · ^G new · ^L CLAUDE.md · Esc close ").right_aligned().fg(DIM),
     );
     let inner = block.inner(rect);
     f.render_widget(block, rect);

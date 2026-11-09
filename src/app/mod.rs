@@ -118,6 +118,8 @@ pub enum Confirmed {
     Task(Plan),
     /// A task with its own tab label.
     Labeled(String, Plan),
+    /// Bring the CLAUDE.md preset into this project.
+    Preset(PathBuf),
     /// `git worktree remove` (the worktree, the main one to go to if you're inside it, --force).
     RemoveWorktree { path: PathBuf, main: PathBuf, force: bool },
     /// Put a deploy target's newest backup back (target, project root).
@@ -693,6 +695,7 @@ impl App {
             Confirmed::Delete(paths) => self.delete(&paths),
             Confirmed::Task(plan) => self.start_task(plan.cmd.replace(GIT, "git"), plan),
             Confirmed::Labeled(label, plan) => self.start_task(label, plan),
+            Confirmed::Preset(dir) => self.apply_preset(&dir),
             Confirmed::RemoveWorktree { path, main, force } => self.remove_worktree(&path, main, force),
             Confirmed::Rollback(d, root) => self.run_deploy(&d, &root, deploy::Run::Rollback),
         }
