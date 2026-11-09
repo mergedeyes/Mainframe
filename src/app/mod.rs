@@ -1,6 +1,7 @@
 //! App state and the key dispatch for the normal mode; each other mode lives in its own file.
 
 mod actions;
+mod cleanup;
 mod deploy;
 mod file_finder;
 mod files;
@@ -23,6 +24,7 @@ use std::{
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+pub use cleanup::CleanupPicker;
 pub use deploy::{DeployPicker, deploy_from_form};
 pub use file_finder::FileFinder;
 pub use installer::{AfterReview, DesktopReview, InstallPicker};
@@ -73,6 +75,7 @@ pub enum Mode {
     Form(Form),
     DesktopReview(DesktopReview),
     Deploy(DeployPicker),
+    Cleanup(CleanupPicker),
 }
 
 #[derive(Clone)]
@@ -109,6 +112,8 @@ impl PromptKind {
 pub enum Confirmed {
     Delete(Vec<PathBuf>),
     Task(Plan),
+    /// A task with its own tab label.
+    Labeled(String, Plan),
     /// Put a deploy target's newest backup back (target, project root).
     Rollback(Box<Deploy>, PathBuf),
 }
@@ -263,6 +268,7 @@ impl App {
         self.poll_tasks();
         self.poll_watchers();
         self.poll_git();
+        self.poll_cleanup();
         self.poll_dir();
         if self.repo_watch.as_ref().is_some_and(|(_, w)| w.changed()) {
             self.request_git();
@@ -276,7 +282,7 @@ impl App {
 
     /// Something is changing on its own, so the screen should redraw often.
     pub fn busy(&self) -> bool {
-        self.task_running() || self.git_pending
+        self.task_running() || self.git_pending || matches!(&self.mode, Mode::Cleanup(p) if p.measuring())
     }
 
     /// Forces preview, run hint, project and git info to be recomputed.
@@ -427,6 +433,7 @@ impl App {
             Mode::Form(_) => self.key_form(key),
             Mode::DesktopReview(_) => self.key_desktop_review(key),
             Mode::Deploy(_) => self.key_deploy(key),
+            Mode::Cleanup(_) => self.key_cleanup(key),
             Mode::Normal => self.key_normal(key),
         }
         if !self.show_output {
@@ -526,6 +533,7 @@ impl App {
             KeyCode::Char('T') => self.open_task_picker(),
             KeyCode::Char('i') => self.open_install_picker(),
             KeyCode::Char('D') => self.open_deploy(None),
+            KeyCode::Char('C') => self.open_cleanup(),
             KeyCode::Char('g') => {
                 self.await_git();
                 self.mode = Mode::GitMenu;
@@ -678,6 +686,7 @@ impl App {
         match action {
             Confirmed::Delete(paths) => self.delete(&paths),
             Confirmed::Task(plan) => self.start_task(plan.cmd.replace(GIT, "git"), plan),
+            Confirmed::Labeled(label, plan) => self.start_task(label, plan),
             Confirmed::Rollback(d, root) => self.run_deploy(&d, &root, deploy::Run::Rollback),
         }
     }

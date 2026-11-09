@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{AfterReview, App, DeployPicker, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode, NotesView, ProjectPicker, TaskPicker},
+    app::{AfterReview, App, CleanupPicker, DeployPicker, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode, NotesView, ProjectPicker, TaskPicker},
     complete::Completer,
     form::{Form, FormKind},
     browser::{Preview, Sort, human_size},
@@ -67,6 +67,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Form(form) => draw_form(f, form, f.area()),
         Mode::DesktopReview(review) => draw_desktop_review(f, review, f.area()),
         Mode::Deploy(picker) => draw_deploy(f, picker, f.area()),
+        Mode::Cleanup(picker) => draw_cleanup(f, picker, f.area()),
         _ => {}
     }
 }
@@ -533,6 +534,7 @@ const HELP: [&[HelpSection]; 3] = [
                 ("t / T", "test / all tasks"),
                 ("i", "install picker"),
                 ("D", "deploy to a device"),
+                ("C", "clean builds / caches"),
                 ("g", "git menu"),
                 ("M", "project notes / todos"),
                 (":", "shell command"),
@@ -1026,6 +1028,72 @@ fn draw_deploy(f: &mut Frame, picker: &mut DeployPicker, area: Rect) {
         })
         .collect();
     let list = List::new(items)
+        .highlight_symbol("▌ ")
+        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(list, list_area, &mut picker.state);
+    f.render_widget(Paragraph::new(details), details_area);
+}
+
+fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
+    let title = Line::from(format!(" clean up {} ", picker.title).bold());
+    if picker.measuring() {
+        let rect = popup(area, 60, 3);
+        f.render_widget(Clear, rect);
+        let spin = SPINNER[(picker.started.elapsed().as_millis() / 80) as usize % SPINNER.len()];
+        let block = pane(title, true).title_bottom(Line::from(" Esc close ").right_aligned().fg(DIM));
+        let inner = block.inner(rect);
+        f.render_widget(block, rect);
+        f.render_widget(Line::from(vec![Span::styled(format!(" {spin} "), Style::new().fg(ACCENT)), "measuring…".fg(DIM)]), inner);
+        return;
+    }
+
+    let label = |s: &'static str| Span::styled(format!("  {s:<6}"), Style::new().fg(DIM));
+    let mut details = Vec::new();
+    if let Some(item) = picker.selected() {
+        details.push(Line::from(vec![label("what"), Span::raw(item.note)]));
+        details.push(Line::from(vec![
+            label("runs"),
+            Span::styled(truncate(&item.command(&picker.root), 90), Style::new().fg(DIM)),
+        ]));
+    }
+    if !picker.marked.is_empty() {
+        let chosen = picker.chosen();
+        details.push(Line::from(vec![
+            label("marked"),
+            Span::styled(
+                format!("{} · {}", chosen.len(), human_size(crate::cleanup::total(&chosen))),
+                Style::new().fg(Color::Yellow),
+            ),
+        ]));
+    }
+
+    let items = picker.items();
+    let rows = items.len() as u16;
+    let rect = popup(area, 100, rows + details.len() as u16 + 4);
+    f.render_widget(Clear, rect);
+    let block = pane(title, true)
+        .title_bottom(Line::from(" Space mark · Enter clean · Esc close ").right_aligned().fg(DIM));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let [list_area, _, details_area] =
+        Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+
+    let label_w = items.iter().map(|i| i.label.chars().count()).max().unwrap_or(0).min(24);
+    let rows: Vec<ListItem> = items
+        .iter()
+        .enumerate()
+        .map(|(n, i)| {
+            let mark = if picker.marked.contains(&n) { "● " } else { "  " };
+            let size = i.size.map_or_else(|| "–".to_string(), human_size);
+            ListItem::new(Line::from(vec![
+                Span::styled(mark, Style::new().fg(Color::Yellow)),
+                Span::styled(format!("{:<label_w$}", truncate(&i.label, label_w)), Style::new().fg(Color::Yellow).bold()),
+                Span::raw(format!("{size:>9}  ")),
+                Span::styled(i.location(&picker.root), Style::new().fg(DIM)),
+            ]))
+        })
+        .collect();
+    let list = List::new(rows)
         .highlight_symbol("▌ ")
         .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
     f.render_stateful_widget(list, list_area, &mut picker.state);
