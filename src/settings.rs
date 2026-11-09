@@ -26,6 +26,8 @@ pub const TEMPLATE: &str = r#"# Mainframe settings for {project}
 # host = "pi@raspberrypi.local"          # anything ssh accepts, incl. Host aliases from ~/.ssh/config
 # remote_path = "/usr/local/bin/myapp"   # replaced in place, mode and owner kept
 # build = "cross build --release --target aarch64-unknown-linux-gnu"   # runs in the project root; "" skips it
+# from = "main"           # optional: build this branch (or commit) in a separate checkout, not the
+#                         # folder as it is; keep_deploy_builds in the main config keeps that checkout
 # artifact = "target/aarch64-unknown-linux-gnu/release/myapp"           # relative to the project root
 # sudo = true             # replace it with sudo (needed for /usr/local/bin and the like)
 # restart = "sudo systemctl restart myapp"   # optional, runs on the remote afterwards
@@ -56,6 +58,8 @@ pub struct Deploy {
     pub host: String,
     pub remote_path: String,
     pub build: String,
+    /// A branch or commit to build in a separate checkout; empty builds the project folder.
+    pub from: String,
     pub artifact: String,
     pub sudo: bool,
     pub restart: String,
@@ -72,6 +76,7 @@ impl Default for Deploy {
             host: String::new(),
             remote_path: String::new(),
             build: String::new(),
+            from: String::new(),
             artifact: String::new(),
             sudo: false,
             restart: String::new(),
@@ -152,6 +157,9 @@ fn render_deploy(d: &Deploy) -> String {
     out += &format!("host = {}\n", s(&d.host));
     out += &format!("remote_path = {}\n", s(&d.remote_path));
     out += &format!("build = {}\n", s(&d.build));
+    if !d.from.is_empty() {
+        out += &format!("from = {}\n", s(&d.from));
+    }
     out += &format!("artifact = {}\n", s(&d.artifact));
     out += &format!("sudo = {}\n", d.sudo);
     for (k, v, dv) in [("restart", &d.restart, &def.restart), ("ssh", &d.ssh, &def.ssh), ("key", &d.key, &def.key)] {
@@ -186,7 +194,16 @@ impl Deploy {
         if self.artifact.trim().is_empty() {
             return Some("needs the artifact: the built file to copy".into());
         }
+        if self.from.trim().contains(char::is_whitespace) {
+            return Some("from must be one branch or commit, like main".into());
+        }
         None
+    }
+
+    /// Where a `from` build happens: one checkout per project and target.
+    pub fn build_dir(&self, root: &Path) -> PathBuf {
+        let safe: String = self.name.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect();
+        config::cache_dir().join("deploy").join(format!("{}--{safe}", path_key(root)))
     }
 
     pub fn artifact_path(&self, root: &Path) -> PathBuf {
@@ -199,13 +216,21 @@ impl Deploy {
     }
 
     /// The steps in plain words, for the picker and the form.
-    pub fn summary(&self, root: &Path) -> Vec<String> {
+    pub fn summary(&self, root: &Path, keep_build: bool) -> Vec<String> {
         let mut steps = Vec::new();
+        let from = self.from.trim();
+        if !from.is_empty() {
+            let after = if keep_build { "kept for the next deploy" } else { "removed afterwards" };
+            steps.push(format!("check out {from} in {} ({after})", config::pretty_path(&self.build_dir(root))));
+        }
         if !self.build.trim().is_empty() {
             steps.push(self.build.trim().to_string());
         }
         let artifact = self.artifact_path(root);
-        let shown = artifact.strip_prefix(root).map_or_else(|_| config::pretty_path(&artifact), |r| r.display().to_string());
+        let mut shown = artifact.strip_prefix(root).map_or_else(|_| config::pretty_path(&artifact), |r| r.display().to_string());
+        if !from.is_empty() {
+            shown = format!("{shown} (of {from})");
+        }
         steps.push(format!("copy {shown} → {}", self.host));
         let sudo = if self.sudo { "with sudo, " } else { "" };
         let keep = match self.keep {
@@ -283,7 +308,12 @@ impl Deploy {
     }
 
     /// The whole deploy as a shell script, run from the project root.
-    pub fn script(&self, root: &Path) -> String {
+    pub fn script(&self, root: &Path, keep_build: bool) -> String {
+        self.script_in(root, &self.build_dir(root), keep_build)
+    }
+
+    /// `script`, with the checkout for a `from` build at `work`.
+    fn script_in(&self, root: &Path, work: &Path, keep_build: bool) -> String {
         let s = self.sudo_prefix();
         let dst = quote_str(&self.remote_path);
         let keep_tail = if self.keep == 0 {
@@ -326,15 +356,20 @@ echo "✔ replaced $dst"
         );
         let upload = format!("set -e\n{}\ncat > \"$tmp\"", self.remote_tmp());
 
-        let artifact = self.artifact_path(root);
         let mut out = String::from(PRELUDE);
+        let from = self.from.trim();
+        let artifact = if from.is_empty() {
+            quote(&self.artifact_path(root))
+        } else {
+            out += &self.checkout(from, work, keep_build);
+            let p = config::expand_tilde(self.artifact.trim());
+            // The project may be a subfolder of the repo: the same subfolder of the checkout.
+            if p.is_absolute() { quote(&p) } else { format!("\"$work/$prefix\"{}", quote(&p)) }
+        };
         if !self.build.trim().is_empty() {
             out += &format!("step {}\n(\n{}\n) || fail 'build failed — nothing was copied'\n", quote_str(&format!("build · {}", self.build.trim())), self.build.trim());
         }
-        out += &format!(
-            "a={a}\n[ -f \"$a\" ] || fail \"no file at $a — check artifact in the deploy settings\"\n",
-            a = quote(&artifact)
-        );
+        out += &format!("a={artifact}\n[ -f \"$a\" ] || fail \"no file at $a — check artifact in the deploy settings\"\n");
         out += &format!("step \"copy $(du -h \"$a\" | cut -f1) → \"{}\n", quote_str(self.host.trim()));
         out += &format!("{} < \"$a\" || fail {}\n", self.remote(&upload, false), quote_str(self.hint_ssh()));
         out += &format!("step {}\n", quote_str(&format!("swap in {}", self.remote_path)));
@@ -345,6 +380,44 @@ echo "✔ replaced $dst"
         );
         self.push_restart(&mut out, "the new binary is in place, D then u rolls back");
         out += "printf '\\033[1;32m✔ deployed\\033[0m\\n'\n";
+        out
+    }
+
+    /// Script lines that check `from` out in its own worktree at `work` (reused if it's
+    /// there) and continue in there; unless kept, it's removed when the script ends,
+    /// whether the deploy worked or not.
+    fn checkout(&self, from: &str, work: &Path, keep_build: bool) -> String {
+        let r = quote_str(from);
+        let mut out = format!(
+            r#"src=$(pwd)
+work={work}
+prefix=$(git rev-parse --show-prefix 2>/dev/null) || fail {needs_git}
+git rev-parse --verify --quiet {r}^{{commit}} >/dev/null || fail {missing}
+step {step}
+if [ -e "$work/.git" ]; then
+  git -C "$work" checkout -q --detach --force {r} && git -C "$work" clean -q -fd || fail 'could not update the build checkout'
+else
+  rm -rf "$work"
+  git worktree prune
+  mkdir -p "$(dirname "$work")"
+  git worktree add -q --detach "$work" {r} || fail 'could not create the build checkout'
+fi
+"#,
+            work = quote(work),
+            needs_git = quote_str(&format!("from = {from} needs a git repository")),
+            missing = quote_str(&format!("no branch or commit {from} here")),
+            step = quote_str(&format!("check out {from} → {}", config::pretty_path(work))),
+        );
+        if !keep_build {
+            out += "trap 'step \"remove build checkout\"; git -C \"$src\" worktree remove --force \"$work\" && echo \"removed $work\"' EXIT
+";
+        }
+        out += "[ ! -f \"$work/.gitmodules\" ] || git -C \"$work\" submodule update -q --init --recursive || fail 'could not fetch submodules'
+";
+        out += "echo \"building $(git -C \"$work\" log -1 --format='%h %s')\"
+";
+        out += "cd \"$work/$prefix\" || fail \"no $prefix in the checkout\"
+";
         out
     }
 
@@ -446,8 +519,10 @@ mod tests {
     #[test]
     fn scripts_are_valid_sh() {
         let root = Path::new("/home/u/proj");
-        for d in [pi(), Deploy { sudo: false, interactive: true, build: String::new(), restart: String::new(), keep: 0, ..pi() }] {
-            assert!(sh_syntax_ok(&d.script(root)), "{}", d.script(root));
+        let from = Deploy { from: "main".into(), ..pi() };
+        for d in [pi(), from, Deploy { sudo: false, interactive: true, build: String::new(), restart: String::new(), keep: 0, ..pi() }] {
+            assert!(sh_syntax_ok(&d.script(root, false)), "{}", d.script(root, false));
+            assert!(sh_syntax_ok(&d.script(root, true)), "{}", d.script(root, true));
             assert!(sh_syntax_ok(&d.rollback_script()));
             assert!(sh_syntax_ok(&d.backups_script()));
         }
@@ -497,7 +572,7 @@ mod tests {
             b
         };
 
-        let out = run(d.script(&base));
+        let out = run(d.script(&base, false));
         assert!(out.contains("deployed"), "{out}");
         assert_eq!(fs::read_to_string(&remote).unwrap(), "new");
         let mode = Command::new("stat").args(["-c", "%a"]).arg(&remote).output().unwrap();
@@ -505,13 +580,13 @@ mod tests {
         assert_eq!(backups().len(), 1);
 
         // Same build again: nothing replaced, no extra backup.
-        assert!(run(d.script(&base)).contains("already this build"));
+        assert!(run(d.script(&base, false)).contains("already this build"));
         assert_eq!(backups().len(), 1);
 
         // A newer build: the backup of "new" stays, the older one goes (keep = 1).
         fs::write(base.join("artifact"), "newer").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        run(d.script(&base));
+        run(d.script(&base, false));
         assert_eq!(fs::read_to_string(&remote).unwrap(), "newer");
         assert_eq!(backups().len(), 1);
 
@@ -521,5 +596,70 @@ mod tests {
         assert!(run(d.backups_script()).contains("app"));
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    /// `from = "main"` while another branch with uncommitted edits is checked out, in a
+    /// project that's a subfolder of its repo: main's build goes out, the checkout is
+    /// removed afterwards (or kept when asked), the working copy stays as it was.
+    #[test]
+    fn from_builds_the_branch_in_a_separate_checkout() {
+        let base = std::env::temp_dir().join(format!("mainframe-deploy-from-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (bin, repo, work) = (base.join("bin"), base.join("repo"), base.join("cache/work"));
+        let proj = repo.join("app");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&proj).unwrap();
+        let stub = bin.join("ssh");
+        fs::write(&stub, "#!/bin/sh\nwhile [ $# -gt 1 ]; do case $1 in -o) shift 2;; -t) shift;; *) shift; break;; esac; done\nexec sh -c \"$*\"\n").unwrap();
+        Command::new("chmod").arg("+x").arg(&stub).status().unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(&repo).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q", "-b", "main"]);
+        fs::write(proj.join("version.txt"), "main").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "main"]);
+        git(&["switch", "-q", "-c", "dev"]);
+        fs::write(proj.join("version.txt"), "dev").unwrap();
+        git(&["commit", "-q", "-am", "dev"]);
+        fs::write(proj.join("version.txt"), "dev, half done").unwrap();
+
+        // Not "app": the other deploy test uploads to /tmp/mainframe-<uid>-app at the same time.
+        let remote = base.join("remote/app-from");
+        let d = Deploy {
+            name: "t".into(),
+            host: "h".into(),
+            remote_path: remote.to_string_lossy().into(),
+            build: "mkdir -p out && cp version.txt out/app".into(),
+            from: "main".into(),
+            artifact: "out/app".into(),
+            ..Deploy::default()
+        };
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let run = |script: String| {
+            let out = Command::new("sh").arg("-c").arg(script).current_dir(&proj).env("PATH", &path).output().unwrap();
+            let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            (out.status.success(), text)
+        };
+
+        let (ok, out) = run(d.script_in(&proj, &work, false));
+        let deployed = fs::read_to_string(&remote).ok();
+        let left_behind = work.exists();
+        let (ok_kept, out_kept) = run(d.script_in(&proj, &work, true));
+        let kept = work.join("app/out/app").exists();
+        // A missing branch fails before anything is built or copied.
+        let (ok_missing, out_missing) = run(Deploy { from: "nope".into(), ..d.clone() }.script_in(&proj, &work, false));
+        let wc = fs::read_to_string(proj.join("version.txt")).unwrap();
+        let _ = fs::remove_dir_all(&base);
+
+        assert!(ok, "{out}");
+        assert_eq!(deployed.as_deref(), Some("main"), "{out}");
+        assert!(!left_behind, "{out}");
+        assert!(out.contains("removed"), "{out}");
+        assert!(ok_kept, "{out_kept}");
+        assert!(kept, "{out_kept}");
+        assert!(!ok_missing && out_missing.contains("no branch or commit nope"), "{out_missing}");
+        assert_eq!(wc, "dev, half done");
     }
 }
