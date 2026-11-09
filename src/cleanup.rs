@@ -131,13 +131,104 @@ const NATIVE: &[(&str, &str)] = &[
 
 const GO: &[(&str, &str)] = &[("build", "build output"), ("bin", "build output")];
 
-/// Everything there is to clean in the project and in the same project in every other
-/// worktree of its repo, measured. Slow on big trees, so it runs off the UI thread.
-pub fn scan(project: &Project) -> Vec<Item> {
-    let mut items = scan_one(project, true);
-    for (name, root) in other_worktrees(&project.root) {
-        let Some(p) = project::detect(&root).filter(|p| p.root == root) else { continue };
-        items.extend(scan_one(&p, false).into_iter().map(|i| Item { place: Some(name.clone()), ..i }));
+/// Everything there is to clean in the folder (a project, or one holding projects) and
+/// in the same folder in every other worktree of its repo, measured. Slow on big trees,
+/// so it runs off the UI thread.
+pub fn scan(root: &Path) -> Vec<Item> {
+    let others = other_worktrees(root);
+    let skip: HashSet<PathBuf> = others.iter().map(|(_, p)| p.clone()).collect();
+    let mut items = scan_tree(root, None, true, &skip);
+    for (name, root) in others {
+        items.extend(scan_tree(&root, Some(&name), false, &skip));
+    }
+    // Workspace members share the workspace's target, which is listed once.
+    let mut seen = HashSet::new();
+    items.retain(|i| i.paths.is_empty() || seen.insert(i.paths.clone()));
+    items
+}
+
+/// Folders never walked into for nested projects: huge, and nothing in them is ours.
+const SKIP: &[&str] = &["node_modules", "target", "vendor", "venv", "site-packages", "__pycache__", "bower_components", "Pods"];
+
+/// How far and how much the walk for nested projects goes, so a huge tree can't stall it.
+const MAX_DEPTH: usize = 8;
+const MAX_DIRS: usize = 50_000;
+
+/// The project, then every project nested below it (a `frontend/` with its own
+/// `package.json`, workspace members, examples) and stray cache folders (`CACHEDIR.TAG`,
+/// e.g. a `target` whose `Cargo.toml` is gone). Their rows are prefixed with where they are.
+fn scan_tree(root: &Path, place: Option<&str>, shared: bool, skip: &HashSet<PathBuf>) -> Vec<Item> {
+    let at = |rel: &Path| {
+        let rel = rel.to_string_lossy();
+        match (place, rel.is_empty()) {
+            (Some(p), true) => Some(p.to_string()),
+            (Some(p), false) => Some(format!("{p}/{rel}")),
+            (None, true) => None,
+            (None, false) => Some(rel.into_owned()),
+        }
+    };
+    let top = project::detect(root).filter(|p| p.root == root);
+    let mut items: Vec<Item> = top
+        .map(|p| scan_one(&p, shared).into_iter().map(|i| Item { place: at(Path::new("")), ..i }).collect())
+        .unwrap_or_default();
+    let mut covered: Vec<PathBuf> = items.iter().flat_map(|i| i.paths.clone()).collect();
+    let mut budget = MAX_DIRS;
+    let mut stack = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        let mut subdirs: Vec<PathBuf> = rd
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                !name.starts_with('.') && !SKIP.contains(&name.as_ref())
+                    || e.path().join("CACHEDIR.TAG").is_file()
+            })
+            .map(|e| e.path())
+            .collect();
+        subdirs.sort_by_key(|p| p.to_string_lossy().to_lowercase());
+        let mut descend = Vec::new();
+        for sub in subdirs {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if skip.contains(&sub) || covered.iter().any(|c| sub.starts_with(c)) {
+                continue;
+            }
+            let rel = sub.strip_prefix(root).unwrap_or(&sub).to_path_buf();
+            if sub.join("CACHEDIR.TAG").is_file() {
+                let parent = rel.parent().unwrap_or(Path::new(""));
+                let name = rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let mut item = Item::dirs(&sub, name, "marked as a cache folder — the tool that made it builds it again", vec![sub.clone()]);
+                item.place = at(parent);
+                item.root = root.join(parent);
+                item.size = Some(total(&[&item]));
+                covered.push(sub);
+                items.push(item);
+                continue;
+            }
+            if !project::kinds_at(&sub).is_empty()
+                && let Some(p) = project::detect(&sub)
+            {
+                let found: Vec<Item> = scan_one(&p, false).into_iter().map(|i| Item { place: at(&rel), ..i }).collect();
+                covered.extend(found.iter().flat_map(|i| i.paths.clone()));
+                items.extend(found);
+                // A repo in here: its other worktrees too, wherever they live.
+                if sub.join(".git").is_dir() {
+                    let here = at(&rel).unwrap_or_default();
+                    for (name, wt) in other_worktrees(&sub).into_iter().filter(|(_, w)| !skip.contains(w)) {
+                        items.extend(scan_tree(&wt, Some(&format!("{here} ⎇ {name}")), false, skip));
+                    }
+                }
+            }
+            if depth + 1 < MAX_DEPTH {
+                descend.push((sub, depth + 1));
+            }
+        }
+        // Popped in name order.
+        stack.extend(descend.into_iter().rev());
     }
     items
 }
@@ -379,9 +470,24 @@ fn disk_usage(path: &Path, seen: &mut HashSet<(u64, u64)>) -> u64 {
     n
 }
 
+/// What the items are, short enough for one line: their titles for a few, else counts
+/// per kind ("debug builds ×28, incremental cache ×2").
+pub fn summary(items: &[&Item]) -> String {
+    if items.len() <= 3 {
+        return items.iter().map(|i| i.title()).collect::<Vec<_>>().join(", ");
+    }
+    let mut kinds: Vec<(&str, usize)> = Vec::new();
+    for i in items {
+        match kinds.iter_mut().find(|(l, _)| *l == i.label) {
+            Some((_, n)) => *n += 1,
+            None => kinds.push((&i.label, 1)),
+        }
+    }
+    kinds.iter().map(|(l, n)| if *n > 1 { format!("{l} ×{n}") } else { l.to_string() }).collect::<Vec<_>>().join(", ")
+}
+
 /// `echo` line for the end of the run, so the output pane says what happened.
-pub fn done_line(labels: &[String], size: Option<u64>) -> String {
-    let what = labels.join(", ");
+pub fn done_line(what: &str, size: Option<u64>) -> String {
     let msg = match size {
         Some(n) if n > 0 => format!("cleaned {what} — {} freed", crate::browser::human_size(n)),
         _ => format!("cleaned {what}"),
@@ -397,13 +503,17 @@ mod tests {
     fn offers_output_but_not_tracked_folders() {
         let root = std::env::temp_dir().join(format!("mainframe-cleanup-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        for d in ["node_modules/x", "dist", "build", "src/__pycache__"] {
+        for d in ["node_modules/x", "dist", "build", "src/__pycache__", "tools/web/node_modules", "old/target", ".hidden/p/node_modules"] {
             fs::create_dir_all(root.join(d)).unwrap();
         }
         fs::write(root.join("package.json"), r#"{"scripts":{"clean":"rm -rf dist"}}"#).unwrap();
         fs::write(root.join("pyproject.toml"), "[project]\nname = \"fx\"\n").unwrap();
         fs::write(root.join("node_modules/x/a.js"), vec![0u8; 50_000]).unwrap();
         fs::write(root.join("build/keep.sh"), "echo source\n").unwrap();
+        // Nested: a project, a target left without its Cargo.toml, and one in a hidden folder.
+        fs::write(root.join("tools/web/package.json"), "{}").unwrap();
+        fs::write(root.join("old/target/CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55").unwrap();
+        fs::write(root.join(".hidden/p/package.json"), "{}").unwrap();
         let git = |args: &[&str]| Command::new("git").arg("-C").arg(&root).args(args).output().unwrap();
         git(&["init", "-q", "-b", "main"]);
         git(&["add", "build/keep.sh", "package.json", "pyproject.toml"]);
@@ -414,7 +524,7 @@ mod tests {
         Command::new("git").arg("-C").arg(&root).args(["worktree", "add", "-q"]).arg(&wt).output().unwrap();
         fs::create_dir_all(wt.join("node_modules")).unwrap();
 
-        let items = scan(&project::detect(&root).unwrap());
+        let items = scan(&root);
         let titles: Vec<String> = items.iter().map(|i| i.title()).collect();
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&wt);
@@ -427,6 +537,8 @@ mod tests {
                 "dist".into(),
                 "__pycache__".into(),
                 "npm clean".into(),
+                "old · target".into(),
+                "tools/web · node_modules".into(),
                 format!("{wt_name} · node_modules"),
                 format!("{wt_name} · npm clean"),
             ]
@@ -435,7 +547,9 @@ mod tests {
         assert_eq!(items[0].command(&root), "rm -rf -- node_modules");
         assert_eq!(items[3].command(&root), "npm run clean");
         assert_eq!(items[3].size, None);
-        assert_eq!(items[4].command(&root), format!("rm -rf -- {}", quote(&wt.join("node_modules"))));
-        assert_eq!(items[5].command(&root), format!("(cd {} && npm run clean)", quote(&wt)));
+        assert_eq!(items[4].command(&root), "rm -rf -- old/target");
+        assert_eq!(items[5].command(&root), "rm -rf -- tools/web/node_modules");
+        assert_eq!(items[6].command(&root), format!("rm -rf -- {}", quote(&wt.join("node_modules"))));
+        assert_eq!(items[7].command(&root), format!("(cd {} && npm run clean)", quote(&wt)));
     }
 }

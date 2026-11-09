@@ -1072,7 +1072,7 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
     let rect = popup(area, 100, rows + details.len() as u16 + 4);
     f.render_widget(Clear, rect);
     let block = pane(title, true)
-        .title_bottom(Line::from(" Space mark · Enter clean · Esc close ").right_aligned().fg(DIM));
+        .title_bottom(Line::from(" Space mark · a mark all like this · Enter clean · Esc close ").right_aligned().fg(DIM));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [list_area, _, details_area] =

@@ -16,6 +16,7 @@ use ratatui::{
 use super::{App, Confirmed, Level, Mode};
 use crate::{
     browser::human_size,
+    config,
     cleanup::{self, Item},
     project::{self, Plan},
 };
@@ -61,17 +62,22 @@ impl App {
             Some(e) if e.is_dir => e.path.clone(),
             _ => self.browser.cwd.clone(),
         };
-        let Some(p) = project::detect(&start) else {
-            return self.set_status("no project here", Level::Err);
+        // Outside a project, everything below the folder: a group like Games/ or all projects.
+        let (title, root) = match project::detect(&start) {
+            Some(p) => (p.name, p.root),
+            None if start == config::home() || start.parent().is_none() => {
+                return self.set_status("no project here — C cleans a project or a folder of projects, not all of ~", Level::Err);
+            }
+            None => (config::pretty_path(&start), start),
         };
         let (tx, rx) = mpsc::channel();
-        let scan = p.clone();
+        let scan = root.clone();
         thread::spawn(move || {
             let _ = tx.send(cleanup::scan(&scan));
         });
         self.mode = Mode::Cleanup(CleanupPicker {
-            title: p.name.clone(),
-            root: p.root,
+            title,
+            root,
             items: None,
             rx,
             started: Instant::now(),
@@ -110,6 +116,19 @@ impl App {
                 }
                 picker.state.select(Some((cur + 1).min(len - 1)));
             }
+            // Every row like this one: all debug builds of all projects below, say.
+            KeyCode::Char('a') if len > 0 => {
+                let items = picker.items();
+                let label = items[cur].label.clone();
+                let like: Vec<usize> = (0..len).filter(|&i| items[i].label == label).collect();
+                if like.iter().all(|i| picker.marked.contains(i)) {
+                    like.iter().for_each(|i| {
+                        picker.marked.remove(i);
+                    });
+                } else {
+                    picker.marked.extend(like);
+                }
+            }
             KeyCode::Enter | KeyCode::Char('C') => self.confirm_cleanup(),
             _ => {}
         }
@@ -122,18 +141,18 @@ impl App {
             return;
         }
         let root = picker.root.clone();
-        let labels: Vec<String> = chosen.iter().map(|i| i.title()).collect();
+        let what = cleanup::summary(&chosen);
         // A size is only promised when every row was measured and none runs a tool.
         let measured = chosen.iter().all(|i| i.size.is_some() && i.cmd.is_none());
         let size = measured.then(|| cleanup::total(&chosen));
         let mut steps: Vec<String> = chosen.iter().map(|i| i.command(&root)).collect();
-        steps.push(cleanup::done_line(&labels, size));
+        steps.push(cleanup::done_line(&what, size));
         let plan = Plan { cmd: steps.join(" && "), cwd: root };
-        let what = match size {
-            Some(n) => format!("{} ({})", labels.join(", "), human_size(n)),
-            None => labels.join(", "),
+        let label = if chosen.len() == 1 { format!("clean {what}") } else { format!("clean {} things", chosen.len()) };
+        let sized = match size {
+            Some(n) => format!("{what} ({})", human_size(n)),
+            None => what,
         };
-        let label = if labels.len() == 1 { format!("clean {}", labels[0]) } else { format!("clean {} things", labels.len()) };
-        self.mode = Mode::Confirm { msg: format!("Delete {what}? [y/N]"), action: Confirmed::Labeled(label, plan) };
+        self.mode = Mode::Confirm { msg: format!("Delete {sized}? [y/N]"), action: Confirmed::Labeled(label, plan) };
     }
 }
