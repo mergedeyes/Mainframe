@@ -58,10 +58,9 @@ impl CleanupPicker {
 
 impl App {
     pub(super) fn open_cleanup(&mut self) {
-        let start = match self.browser.selected() {
-            Some(e) if e.is_dir => e.path.clone(),
-            _ => self.browser.cwd.clone(),
-        };
+        // The folder you're in, not the one under the cursor: in ~/Projekte that's every
+        // project, inside a project's subfolder the whole project.
+        let start = self.browser.cwd.clone();
         // Outside a project, everything below the folder: a group like Games/ or all projects.
         let (title, root) = match project::detect(&start) {
             Some(p) => (p.name, p.root),
