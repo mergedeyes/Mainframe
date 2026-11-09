@@ -15,6 +15,44 @@ use crate::{
 };
 
 impl App {
+    /// Asks before `git worktree remove`, saying what stays and what would be lost.
+    pub(super) fn confirm_remove_worktree(&mut self, which: &str) {
+        let all = git::worktrees(&self.browser.cwd);
+        let Some(main) = all.first().map(|w| w.path.clone()) else {
+            return self.set_status("not a git repository", Level::Err);
+        };
+        let wanted = config::expand_tilde(which);
+        let Some(w) = all.iter().skip(1).find(|w| w.name() == which || w.path == wanted) else {
+            return self.set_status(format!("no worktree {which} — Tab lists them"), Level::Err);
+        };
+        let dirty = if w.gone { 0 } else { git::uncommitted(&w.path) };
+        let mut msg = format!("Remove worktree {}", config::pretty_path(&w.path));
+        if w.gone {
+            msg.push_str(" (its folder is already gone)");
+        }
+        if let Some(b) = &w.branch {
+            msg.push_str(&format!("; branch {b} stays"));
+        }
+        if dirty > 0 {
+            msg.push_str(&format!("; its {dirty} uncommitted change{} are lost", if dirty == 1 { "" } else { "s" }));
+        }
+        self.mode = Mode::Confirm {
+            msg: format!("{msg}? [y/N]"),
+            action: Confirmed::RemoveWorktree { path: w.path.clone(), main, force: dirty > 0 },
+        };
+    }
+
+    /// Leaves the worktree first when you're in it, so the browser isn't left in a deleted folder.
+    pub(super) fn remove_worktree(&mut self, path: &std::path::Path, main: std::path::PathBuf, force: bool) {
+        if self.browser.cwd.starts_with(path) {
+            self.browser.cd(main.clone());
+            self.invalidate();
+        }
+        let force = if force { " --force" } else { "" };
+        let cmd = format!("{GIT} worktree remove{force} {}", quote(path));
+        self.start_task("git worktree remove".into(), Plan { cmd, cwd: main });
+    }
+
     /// s / u: stages or unstages the marked entries (or the selection) in place.
     pub(super) fn stage(&mut self, add: bool) {
         self.await_git();
@@ -84,6 +122,12 @@ impl App {
             'o' => return self.prompt(PromptKind::SwitchBranch, ""),
             'n' => return self.prompt(PromptKind::NewBranch, ""),
             'B' => return self.prompt(PromptKind::PushBranch, ""),
+            'W' => {
+                if git::worktrees(&cwd).len() < 2 {
+                    return self.set_status("this repo has no other worktrees", Level::Info);
+                }
+                return self.prompt(PromptKind::RemoveWorktree, "");
+            }
             'e' => {
                 let cmd = format!("GIT_EDITOR={} git commit --amend", quote_str(&self.config.editor));
                 return self.foreground(Plan { cmd, cwd }, true);

@@ -166,6 +166,42 @@ fn parse_branch(info: &mut GitInfo, head: &str) {
 }
 
 /// Local branches, then remote ones not checked out locally (without the remote prefix).
+pub struct Worktree {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+    /// Its folder was deleted by hand.
+    pub gone: bool,
+}
+
+impl Worktree {
+    pub fn name(&self) -> String {
+        self.path.file_name().map_or_else(|| self.path.display().to_string(), |n| n.to_string_lossy().into_owned())
+    }
+}
+
+/// The repo's worktrees, the main one first.
+pub fn worktrees(cwd: &Path) -> Vec<Worktree> {
+    let Some(raw) = git(cwd, &["worktree", "list", "--porcelain"]) else { return Vec::new() };
+    let mut out: Vec<Worktree> = Vec::new();
+    for line in String::from_utf8_lossy(&raw).lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            out.push(Worktree { path: PathBuf::from(p), branch: None, gone: false });
+        } else if let Some(w) = out.last_mut() {
+            if let Some(b) = line.strip_prefix("branch ") {
+                w.branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+            } else if line.starts_with("prunable") {
+                w.gone = true;
+            }
+        }
+    }
+    out
+}
+
+/// Modified and untracked files in a worktree.
+pub fn uncommitted(path: &Path) -> usize {
+    git(path, &["status", "--porcelain"]).map_or(0, |o| String::from_utf8_lossy(&o).lines().count())
+}
+
 /// Local branches, most recently committed to first.
 pub fn local_branches(cwd: &Path) -> Vec<String> {
     git(cwd, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"])
@@ -275,6 +311,7 @@ pub const MENU: &[(&str, &[MenuItem])] = &[
             item('b', "list branches"),
             item('o', "switch to branch…"),
             item('n', "new branch…"),
+            item('W', "remove a worktree…"),
             item('z', "stash"),
             item('Z', "stash pop"),
         ],
@@ -410,5 +447,40 @@ mod push_tests {
         assert_eq!(String::from_utf8_lossy(&head).trim(), "main");
         assert_eq!(on_remote, local);
         assert_eq!(again, "git push origin feature:feature");
+    }
+}
+
+#[cfg(test)]
+mod worktree_tests {
+    use super::*;
+
+    #[test]
+    fn lists_worktrees_with_branch_gone_and_dirty_state() {
+        let base = std::env::temp_dir().join(format!("mainframe-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let main = base.join("repo");
+        std::fs::create_dir_all(&main).unwrap();
+        let run = |args: &[&str]| {
+            let out = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(&main).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        run(&["worktree", "add", "-q", "../locks", "-b", "edit-locks"]);
+        run(&["worktree", "add", "-q", "../gone", "-b", "old"]);
+        std::fs::write(base.join("locks/new.txt"), "x").unwrap();
+        std::fs::remove_dir_all(base.join("gone")).unwrap();
+
+        let wts = worktrees(&main);
+        let names: Vec<String> = wts.iter().map(|w| w.name()).collect();
+        let dirty = uncommitted(&base.join("locks"));
+        std::fs::remove_dir_all(&base).unwrap();
+
+        // The main one first; the others come sorted by path.
+        assert_eq!(names, ["repo", "gone", "locks"]);
+        let by = |n: &str| wts.iter().find(|w| w.name() == n).unwrap();
+        assert_eq!(by("locks").branch.as_deref(), Some("edit-locks"));
+        assert!(!by("locks").gone && by("gone").gone);
+        assert_eq!(dirty, 1);
     }
 }
