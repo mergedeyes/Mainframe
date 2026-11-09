@@ -1051,6 +1051,13 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
     let mut details = Vec::new();
     if let Some(item) = picker.selected() {
         details.push(Line::from(vec![label("what"), Span::raw(item.note)]));
+        if let Some(u) = item.size.filter(|u| u.disk.is_some()) {
+            details.push(Line::from(vec![
+                label("size"),
+                Span::raw(u.long()),
+                Span::styled("  btrfs compression, estimated from samples", Style::new().fg(DIM)),
+            ]));
+        }
         details.push(Line::from(vec![
             label("runs"),
             Span::styled(truncate(&item.command(&picker.root), 90), Style::new().fg(DIM)),
@@ -1061,7 +1068,7 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
         details.push(Line::from(vec![
             label("marked"),
             Span::styled(
-                format!("{} · {}", chosen.len(), human_size(crate::cleanup::total(&chosen))),
+                format!("{} · {}", chosen.len(), crate::cleanup::total(&chosen).long()),
                 Style::new().fg(Color::Yellow),
             ),
         ]));
@@ -1084,7 +1091,7 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
         .enumerate()
         .map(|(n, i)| {
             let mark = if picker.marked.contains(&n) { "● " } else { "  " };
-            let size = i.size.map_or_else(|| "–".to_string(), human_size);
+            let size = i.size.map_or_else(|| "–".to_string(), |u| u.short());
             ListItem::new(Line::from(vec![
                 Span::styled(mark, Style::new().fg(Color::Yellow)),
                 Span::styled(format!("{:<label_w$}", truncate(&i.title(), label_w)), Style::new().fg(Color::Yellow).bold()),
