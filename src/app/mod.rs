@@ -85,6 +85,7 @@ pub enum PromptKind {
     Commit { all: bool },
     SwitchBranch,
     NewBranch,
+    PushBranch,
     SaveOutput,
 }
 
@@ -100,6 +101,7 @@ impl PromptKind {
             PromptKind::Commit { all: true } => "commit all, message",
             PromptKind::SwitchBranch => "switch to branch",
             PromptKind::NewBranch => "new branch",
+            PromptKind::PushBranch => "push branch",
             PromptKind::SaveOutput => "save output to",
         }
     }
