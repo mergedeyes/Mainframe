@@ -111,6 +111,11 @@ pub fn kind_at(dir: &Path) -> Option<Kind> {
     MARKERS.iter().find(|(_, files)| files.iter().any(|f| dir.join(f).is_file())).map(|&(k, _)| k)
 }
 
+/// Every build tool with a marker right in `dir`, most specific first.
+pub fn kinds_at(dir: &Path) -> Vec<Kind> {
+    MARKERS.iter().filter(|(_, files)| files.iter().any(|f| dir.join(f).is_file())).map(|&(k, _)| k).collect()
+}
+
 fn cargo_name(root: &Path) -> Option<String> {
     let text = fs::read_to_string(root.join("Cargo.toml")).ok()?;
     let value: toml::Table = toml::from_str(&text).ok()?;
