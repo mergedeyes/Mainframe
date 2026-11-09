@@ -8,7 +8,7 @@ use ratatui::{
     widgets::ListState,
 };
 
-use super::{App, Foreground, Level, Mode};
+use super::{App, Confirmed, Foreground, Level, Mode};
 use crate::{
     config,
     form::{Field, Form, FormKind},
@@ -102,6 +102,7 @@ impl App {
             KeyCode::Enter => self.pick_project(Pick::Go),
             KeyCode::Char('t') if ctrl => self.pick_project(Pick::Notes),
             KeyCode::Char('o') if ctrl => self.pick_project(Pick::VsCode),
+            KeyCode::Char('l') if ctrl => self.pick_project(Pick::Preset),
             KeyCode::Char('g') if ctrl => {
                 let root = picker.root.clone();
                 self.new_project_form(&root);
@@ -127,7 +128,40 @@ impl App {
                 self.spawn_detached(&format!("{} {}", self.config.vscode, crate::project::quote(&e.path)));
                 self.set_status(format!("opened {} in VS Code", e.name), Level::Ok);
             }
+            Pick::Preset => self.confirm_preset(e.path),
         }
+    }
+
+    /// `^L`: says what bringing the CLAUDE.md preset into the project will do, and asks.
+    fn confirm_preset(&mut self, dir: PathBuf) {
+        let name = folder_name(&dir);
+        let existing = scaffold::instruction_files(&dir);
+        let msg = match existing.first() {
+            None => format!(
+                "Write a CLAUDE.md from the preset into {name} ({} checks, git ignores it)? [y/N]",
+                scaffold::stacks(&dir).join(" + ")
+            ),
+            Some(f) => format!("Add the CLAUDE.md preset to {name}? Claude merges it into {f} at its next start [y/N]"),
+        };
+        self.mode = Mode::Confirm { msg, action: Confirmed::Preset(dir) };
+    }
+
+    pub(super) fn apply_preset(&mut self, dir: &std::path::Path) {
+        let name = folder_name(dir);
+        let preset = scaffold::render_stacks(&scaffold::template(), &name, &scaffold::stacks(dir));
+        match scaffold::apply_preset(dir, &preset) {
+            Ok(scaffold::Preset::Written) => {
+                self.set_status(format!("{name}: wrote CLAUDE.md from the preset, git ignores it"), Level::Ok);
+            }
+            Ok(scaffold::Preset::Pending(again)) => {
+                let again = if again { " (replaced the one still waiting)" } else { "" };
+                let msg = format!("{name}: Claude merges the preset at its next start{again} — {}", scaffold::PENDING);
+                self.set_status(msg, Level::Ok);
+            }
+            Err(e) => self.set_status(format!("{name}: {e}"), Level::Err),
+        }
+        self.browser.reload();
+        self.invalidate();
     }
 }
 
@@ -217,4 +251,9 @@ enum Pick {
     Go,
     Notes,
     VsCode,
+    Preset,
+}
+
+fn folder_name(dir: &std::path::Path) -> String {
+    dir.file_name().map_or_else(|| config::pretty_path(dir), |n| n.to_string_lossy().into_owned())
 }
