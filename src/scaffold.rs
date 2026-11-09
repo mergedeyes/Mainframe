@@ -62,11 +62,25 @@ program, and say plainly what wasn't verified.
 - Make the smallest correct change, in the layer where the problem actually lives. No speculative refactors.
 - Correct behaviour and functionality first, UX polish second, visual polish last.
 - Don't invent a visual design direction: before significant UI work, ask what's wanted and for reference UIs.
+- A bug found while working on something else gets fixed right away, as its own commit, and mentioned.
+
+## README and docs
+
+- The root README is a product page: what the project is and who it's for, why it's worth using
+  (a few points, each with a bold lead), a short feature list, getting started in a few commands,
+  and links into `docs/`. No config dumps or complete key and option lists there.
+- Details live in `docs/`: an index (`docs/README.md`), an introduction, installation, guides
+  (one task each, numbered steps where the order matters) and a reference that lists every
+  option, key or command completely.
+- Write for someone new to the project: plain, short sentences; explain a term the first time it
+  comes up; tables for keys, options and fields; examples that really work. Mark planned features
+  as *not yet* instead of describing them as done.
+- When there's a UI, show it: screenshots in `docs/images/`, light and dark (a `<picture>` with
+  `prefers-color-scheme`), each with a short caption.
 - Update the README and docs in the same change as the feature or fix, not afterwards.
 - After editing the README or docs, read back what you changed for the current feature or fix once,
   and fix any mistakes: wrong or outdated statements, keys or commands that don't match the code,
   broken links, typos. Only your own edits from this branch, and only one pass.
-- A bug found while working on something else gets fixed right away, as its own commit, and mentioned.
 
 ## Git
 
