@@ -62,6 +62,9 @@ program, and say plainly what wasn't verified.
 - Correct behaviour and functionality first, UX polish second, visual polish last.
 - Don't invent a visual design direction: before significant UI work, ask what's wanted and for reference UIs.
 - Update the README and docs in the same change as the feature or fix, not afterwards.
+- After editing the README or docs, read back what you changed for the current feature or fix once,
+  and fix any mistakes: wrong or outdated statements, keys or commands that don't match the code,
+  broken links, typos. Only your own edits from this branch, and only one pass.
 - A bug found while working on something else gets fixed right away, as its own commit, and mentioned.
 
 ## Git
