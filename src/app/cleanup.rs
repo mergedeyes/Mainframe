@@ -122,7 +122,7 @@ impl App {
             return;
         }
         let root = picker.root.clone();
-        let labels: Vec<&str> = chosen.iter().map(|i| i.label.as_str()).collect();
+        let labels: Vec<String> = chosen.iter().map(|i| i.title()).collect();
         // A size is only promised when every row was measured and none runs a tool.
         let measured = chosen.iter().all(|i| i.size.is_some() && i.cmd.is_none());
         let size = measured.then(|| cleanup::total(&chosen));

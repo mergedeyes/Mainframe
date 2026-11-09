@@ -1078,7 +1078,7 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
     let [list_area, _, details_area] =
         Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
 
-    let label_w = items.iter().map(|i| i.label.chars().count()).max().unwrap_or(0).min(24);
+    let label_w = items.iter().map(|i| i.title().chars().count()).max().unwrap_or(0).min(36);
     let rows: Vec<ListItem> = items
         .iter()
         .enumerate()
@@ -1087,9 +1087,9 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
             let size = i.size.map_or_else(|| "–".to_string(), human_size);
             ListItem::new(Line::from(vec![
                 Span::styled(mark, Style::new().fg(Color::Yellow)),
-                Span::styled(format!("{:<label_w$}", truncate(&i.label, label_w)), Style::new().fg(Color::Yellow).bold()),
+                Span::styled(format!("{:<label_w$}", truncate(&i.title(), label_w)), Style::new().fg(Color::Yellow).bold()),
                 Span::raw(format!("{size:>9}  ")),
-                Span::styled(i.location(&picker.root), Style::new().fg(DIM)),
+                Span::styled(i.location(), Style::new().fg(DIM)),
             ]))
         })
         .collect();

@@ -15,6 +15,10 @@ use crate::{
 };
 
 pub struct Item {
+    /// The other worktree this belongs to (its folder name); None for the project itself.
+    pub place: Option<String>,
+    /// The project root it belongs to (another worktree's for those).
+    pub root: PathBuf,
     pub label: String,
     /// What it is and what brings it back.
     pub note: &'static str,
@@ -27,22 +31,36 @@ pub struct Item {
 }
 
 impl Item {
-    fn dirs(label: impl Into<String>, note: &'static str, paths: Vec<PathBuf>) -> Self {
-        Item { label: label.into(), note, paths, cmd: None, size: None }
+    fn dirs(root: &Path, label: impl Into<String>, note: &'static str, paths: Vec<PathBuf>) -> Self {
+        Item { place: None, root: root.to_path_buf(), label: label.into(), note, paths, cmd: None, size: None }
     }
 
-    pub fn command(&self, root: &Path) -> String {
-        match &self.cmd {
-            Some(c) => c.clone(),
-            None => format!("rm -rf -- {}", self.paths.iter().map(|p| show(p, root)).collect::<Vec<_>>().join(" ")),
+    fn tool(root: &Path, label: impl Into<String>, note: &'static str, paths: Vec<PathBuf>, cmd: impl Into<String>) -> Self {
+        Item { cmd: Some(cmd.into()), ..Item::dirs(root, label, note, paths) }
+    }
+
+    /// The label, with the worktree in front for other worktrees.
+    pub fn title(&self) -> String {
+        match &self.place {
+            Some(w) => format!("{w} · {}", self.label),
+            None => self.label.clone(),
         }
     }
 
-    /// The paths, relative to `root` when they're inside it.
-    pub fn location(&self, root: &Path) -> String {
+    /// The shell command, for running in `cwd`.
+    pub fn command(&self, cwd: &Path) -> String {
+        match &self.cmd {
+            Some(c) if self.root == cwd => c.clone(),
+            Some(c) => format!("(cd {} && {c})", quote(&self.root)),
+            None => format!("rm -rf -- {}", self.paths.iter().map(|p| show(p, cwd)).collect::<Vec<_>>().join(" ")),
+        }
+    }
+
+    /// The paths, relative to the root they belong to.
+    pub fn location(&self) -> String {
         match self.paths.len() {
             0 => String::new(),
-            1..=3 => self.paths.iter().map(|p| show(p, root)).collect::<Vec<_>>().join(" "),
+            1..=3 => self.paths.iter().map(|p| show(p, &self.root)).collect::<Vec<_>>().join(" "),
             n => format!("{n} folders"),
         }
     }
@@ -113,9 +131,41 @@ const NATIVE: &[(&str, &str)] = &[
 
 const GO: &[(&str, &str)] = &[("build", "build output"), ("bin", "build output")];
 
-/// Everything there is to clean in the project at `root`, measured. Slow on big trees,
-/// so it runs off the UI thread.
+/// Everything there is to clean in the project and in the same project in every other
+/// worktree of its repo, measured. Slow on big trees, so it runs off the UI thread.
 pub fn scan(project: &Project) -> Vec<Item> {
+    let mut items = scan_one(project, true);
+    for (name, root) in other_worktrees(&project.root) {
+        let Some(p) = project::detect(&root).filter(|p| p.root == root) else { continue };
+        items.extend(scan_one(&p, false).into_iter().map(|i| Item { place: Some(name.clone()), ..i }));
+    }
+    items
+}
+
+/// The project's folder in each other worktree of its repo (folder name, path), so a
+/// project in a subfolder of the repo maps to the same subfolder there.
+fn other_worktrees(root: &Path) -> Vec<(String, PathBuf)> {
+    let Some(top) = command_output("git", &["rev-parse", "--show-toplevel"], root).map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let Ok(rel) = root.strip_prefix(&top) else { return Vec::new() };
+    let list = command_output("git", &["worktree", "list", "--porcelain"], root).unwrap_or_default();
+    list.lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .filter(|w| *w != top)
+        .map(|w| {
+            let name = w.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            // join("") would add a trailing slash
+            let dir = if rel.as_os_str().is_empty() { w } else { w.join(rel) };
+            (name, dir)
+        })
+        .filter(|(_, p)| p.is_dir())
+        .collect()
+}
+
+/// `shared`: also offer caches every project shares (only once, for the project itself).
+fn scan_one(project: &Project, shared: bool) -> Vec<Item> {
     let root = &project.root;
     let mut items = Vec::new();
     // A Tauri app is cargo and npm at once, so every build tool with a marker here counts.
@@ -131,7 +181,9 @@ pub fn scan(project: &Project) -> Vec<Item> {
             Kind::CMake | Kind::Meson => named(root, NATIVE, &mut items),
             Kind::Go => {
                 named(root, GO, &mut items);
-                go_cache(&mut items);
+                if shared {
+                    go_cache(root, &mut items);
+                }
             }
             Kind::Make | Kind::Just => {}
         }
@@ -143,13 +195,7 @@ pub fn scan(project: &Project) -> Vec<Item> {
 
     // The project's own clean target last: it may do anything, so it isn't measured.
     for t in targets::list(project).into_iter().filter(|t| t.name == "clean") {
-        items.push(Item {
-            label: format!("{} clean", t.group),
-            note: "the project's own clean target",
-            paths: Vec::new(),
-            cmd: Some(t.cmd),
-            size: None,
-        });
+        items.push(Item::tool(root, format!("{} clean", t.group), "the project's own clean target", Vec::new(), t.cmd));
     }
 
     for item in &mut items {
@@ -164,7 +210,7 @@ fn named(root: &Path, list: &[(&str, &'static str)], items: &mut Vec<Item>) {
     for &(name, note) in list {
         let p = root.join(name);
         if fs::symlink_metadata(&p).is_ok() {
-            items.push(Item::dirs(name, note, vec![p]));
+            items.push(Item::dirs(root, name, note, vec![p]));
         }
     }
 }
@@ -175,7 +221,7 @@ fn python_extra(root: &Path, items: &mut Vec<Item>) {
     let mut budget = 50_000;
     find_pycache(root, &mut found, &mut budget);
     if !found.is_empty() {
-        items.push(Item::dirs("__pycache__", "compiled bytecode — Python writes it again on import", found));
+        items.push(Item::dirs(root, "__pycache__", "compiled bytecode — Python writes it again on import", found));
     }
     let egg: Vec<PathBuf> = [root.to_path_buf(), root.join("src")]
         .iter()
@@ -184,7 +230,7 @@ fn python_extra(root: &Path, items: &mut Vec<Item>) {
         .filter(|p| p.is_dir() && p.extension().is_some_and(|x| x == "egg-info"))
         .collect();
     if !egg.is_empty() {
-        items.push(Item::dirs("*.egg-info", "packaging metadata from setuptools", egg));
+        items.push(Item::dirs(root, "*.egg-info", "packaging metadata from setuptools", egg));
     }
 }
 
@@ -210,16 +256,10 @@ fn find_pycache(dir: &Path, out: &mut Vec<PathBuf>, budget: &mut usize) {
 }
 
 /// Go keeps no build output in the project; its compile cache is shared by every project.
-fn go_cache(items: &mut Vec<Item>) {
+fn go_cache(root: &Path, items: &mut Vec<Item>) {
     let Some(dir) = command_output("go", &["env", "GOCACHE"], Path::new("/")).map(PathBuf::from) else { return };
     if dir.is_dir() {
-        items.push(Item {
-            label: "go build cache".into(),
-            note: "shared by all Go projects — rebuilt as needed",
-            paths: vec![dir],
-            cmd: Some("go clean -cache".into()),
-            size: None,
-        });
+        items.push(Item::tool(root, "go build cache", "shared by all Go projects — rebuilt as needed", vec![dir], "go clean -cache"));
     }
 }
 
@@ -256,9 +296,10 @@ fn cargo(root: &Path, items: &mut Vec<Item>) {
             "release" => ("release builds".to_string(), "cargo build --release output — installed copies stay"),
             _ => (format!("{name} builds"), "output of a custom profile"),
         };
-        items.push(Item::dirs(label, note, paths));
+        items.push(Item::dirs(root, label, note, paths));
         if name == "debug" && !incremental.is_empty() {
             items.push(Item::dirs(
+                root,
                 "incremental cache",
                 "incremental compilation cache, grows with every edit — dependencies stay built",
                 incremental.clone(),
@@ -267,15 +308,9 @@ fn cargo(root: &Path, items: &mut Vec<Item>) {
     }
     let doc = target.join("doc");
     if doc.is_dir() {
-        items.push(Item::dirs("docs", "cargo doc output", vec![doc]));
+        items.push(Item::dirs(root, "docs", "cargo doc output", vec![doc]));
     }
-    items.push(Item {
-        label: "all of target".into(),
-        note: "cargo clean — everything cargo built for this project",
-        paths: vec![target],
-        cmd: Some("cargo clean".into()),
-        size: None,
-    });
+    items.push(Item::tool(root, "all of target", "cargo clean — everything cargo built for this project", vec![target], "cargo clean"));
 }
 
 fn is_profile_dir(p: &Path) -> bool {
@@ -345,7 +380,7 @@ fn disk_usage(path: &Path, seen: &mut HashSet<(u64, u64)>) -> u64 {
 }
 
 /// `echo` line for the end of the run, so the output pane says what happened.
-pub fn done_line(labels: &[&str], size: Option<u64>) -> String {
+pub fn done_line(labels: &[String], size: Option<u64>) -> String {
     let what = labels.join(", ");
     let msg = match size {
         Some(n) if n > 0 => format!("cleaned {what} — {} freed", crate::browser::human_size(n)),
@@ -370,17 +405,37 @@ mod tests {
         fs::write(root.join("node_modules/x/a.js"), vec![0u8; 50_000]).unwrap();
         fs::write(root.join("build/keep.sh"), "echo source\n").unwrap();
         let git = |args: &[&str]| Command::new("git").arg("-C").arg(&root).args(args).output().unwrap();
-        git(&["init", "-q"]);
-        git(&["add", "build/keep.sh"]);
+        git(&["init", "-q", "-b", "main"]);
+        git(&["add", "build/keep.sh", "package.json", "pyproject.toml"]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]);
+        // A linked worktree with its own build output.
+        let wt = root.with_file_name(format!("{}-wt", root.file_name().unwrap().to_string_lossy()));
+        let _ = fs::remove_dir_all(&wt);
+        Command::new("git").arg("-C").arg(&root).args(["worktree", "add", "-q"]).arg(&wt).output().unwrap();
+        fs::create_dir_all(wt.join("node_modules")).unwrap();
 
         let items = scan(&project::detect(&root).unwrap());
-        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        fs::remove_dir_all(&root).unwrap();
+        let titles: Vec<String> = items.iter().map(|i| i.title()).collect();
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&wt);
 
-        assert_eq!(labels, ["node_modules", "dist", "__pycache__", "npm clean"]);
+        let wt_name = wt.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(
+            titles,
+            [
+                "node_modules".to_string(),
+                "dist".into(),
+                "__pycache__".into(),
+                "npm clean".into(),
+                format!("{wt_name} · node_modules"),
+                format!("{wt_name} · npm clean"),
+            ]
+        );
         assert!(items[0].size.unwrap() >= 50_000);
         assert_eq!(items[0].command(&root), "rm -rf -- node_modules");
         assert_eq!(items[3].command(&root), "npm run clean");
         assert_eq!(items[3].size, None);
+        assert_eq!(items[4].command(&root), format!("rm -rf -- {}", quote(&wt.join("node_modules"))));
+        assert_eq!(items[5].command(&root), format!("(cd {} && npm run clean)", quote(&wt)));
     }
 }
