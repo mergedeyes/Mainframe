@@ -152,7 +152,8 @@ entry · `u` remove a copy that shadows it on PATH · `Esc` close
 · `Esc` cancel all
 
 **Deploy picker (`D`):** `Enter` or `D` deploy · `u` roll back · `l` list
-backups · `a` add a target · `e` edit settings · `Esc` close
+backups · `a` add a target · `e` edit the target · `x` delete it · `E` the
+settings file in your editor · `Esc` close
 
 **Cleanup (`C`):** `Space` mark · `a` mark all like this · `Enter` delete ·
 `Esc` close

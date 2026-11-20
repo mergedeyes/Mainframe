@@ -91,8 +91,9 @@ same key, the project's action wins.
 
 ### Deploy targets
 
-Each `[[deploy]]` is one target for `D`. The form behind `D` → `a` writes
-these for you; see [Installing and deploying](../guides/install-and-deploy.md).
+Each `[[deploy]]` is one target for `D`. The forms behind `D` → `a` (add)
+and `D` → `e` (edit) write these for you, and leave the rest of the file as
+it is; see [Installing and deploying](../guides/install-and-deploy.md).
 
 ```toml
 [[deploy]]
@@ -102,7 +103,7 @@ remote_path = "/usr/local/bin/myapp"
 build = "cross build --release --target aarch64-unknown-linux-gnu"
 artifact = "target/aarch64-unknown-linux-gnu/release/myapp"
 sudo = true
-restart = "sudo systemctl restart myapp"
+service = "myapp"
 ```
 
 | Field | Default | What it means |
@@ -114,7 +115,8 @@ restart = "sudo systemctl restart myapp"
 | `from` | `""` | a branch or commit to build in a separate checkout instead of the project folder as it is |
 | `artifact` | | the built file to copy, relative to the project folder |
 | `sudo` | `false` | replace it as root |
-| `restart` | `""` | a command to run on the machine afterwards |
+| `service` | `""` | a systemd service to restart afterwards and check that it runs; created if missing, see [Running it as a service](../guides/install-and-deploy.md#running-it-as-a-systemd-service) |
+| `restart` | `""` | any command to run on the machine afterwards, after the service |
 | `keep` | `3` | how many backups to keep there; `0` keeps all |
 | `ssh` | `""` | extra ssh options, like `"-p 2222 -i ~/.ssh/pi"` |
 | `interactive` | `false` | run in the full terminal, so ssh and sudo can ask for passwords |
