@@ -533,7 +533,7 @@ const HELP: [&[HelpSection]; 3] = [
                 ("b / B", "build / release build"),
                 ("t / T", "test / all tasks"),
                 ("i", "install picker"),
-                ("D", "deploy to a device"),
+                ("D", "deploy · edit targets"),
                 ("C", "clean builds / caches"),
                 ("g", "git menu"),
                 ("M", "project notes / todos"),
@@ -1009,7 +1009,7 @@ fn draw_deploy(f: &mut Frame, picker: &mut DeployPicker, area: Rect) {
     let rect = popup(area, 110, picker.targets.len() as u16 + details.len() as u16 + 4);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(format!(" deploy {} ", picker.title).bold()), true).title_bottom(
-        Line::from(" Enter deploy · u roll back · l list backups · a add · e edit settings · Esc close ").right_aligned().fg(DIM),
+        Line::from(" Enter deploy · u roll back · l backups · a add · e edit · x delete · E file · Esc close ").right_aligned().fg(DIM),
     );
     let inner = block.inner(rect);
     f.render_widget(block, rect);

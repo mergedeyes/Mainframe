@@ -61,7 +61,8 @@ unless you ask for it.
 - **Git:** stage from the list, commit, amend, push another branch, branches,
   worktrees, stash, a GitHub repo for any folder, releases with CI.
 - **Install and deploy:** install picker with build info and PATH checks,
-  desktop entries, deploy targets with backups and rollback.
+  desktop entries, deploy targets with backups, rollback and systemd
+  services, set up and edited in the TUI.
 - **Projects:** project picker, notes and todos, new projects with
   `git init`, a CLAUDE.md template for Claude Code.
 - **Cleanup:** build output, dependencies and caches, across projects and

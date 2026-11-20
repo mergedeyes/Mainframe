@@ -219,6 +219,11 @@ pub fn pretty_path(p: &Path) -> String {
     }
 }
 
+/// Whether `s` is a key spec like `F9` or `ctrl-d`.
+pub fn valid_key(s: &str) -> bool {
+    parse_key(s).is_some()
+}
+
 fn parse_key(s: &str) -> Option<(KeyCode, KeyModifiers)> {
     let mut mods = KeyModifiers::NONE;
     let mut rest = s;

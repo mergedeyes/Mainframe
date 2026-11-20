@@ -61,7 +61,11 @@ The first time you press `D` in a project, a form asks for the target:
 | from | a branch to build, like `main`; empty builds your project folder as it is |
 | artifact | the built file, relative to the project, like `target/aarch64-unknown-linux-gnu/release/myapp` |
 | sudo | replace it as root, needed for `/usr/local/bin` and the like |
-| restart | a command to run there afterwards, like `sudo systemctl restart myapp` |
+| service | a systemd service, like `myapp`: restarted after each deploy, created if missing; see [below](#running-it-as-a-systemd-service) |
+| restart | any other command to run there afterwards |
+| keep | how many backups stay there; `0` keeps all |
+| ssh | extra ssh options, like `-p 2222 -i ~/.ssh/pi` |
+| key | a key that deploys to this target without the picker, like `F9` |
 | run | *background* in the output pane, or *terminal* when ssh or sudo ask for a password |
 
 For a Rust project, the form suggests an ARM build for a Raspberry Pi, with
@@ -72,7 +76,9 @@ mold linker) would break the build in there, so a build that runs `cross`
 hides that file from the container. Your file stays as it is.
 
 The target is saved in `~/.config/mainframe/projects/`, outside the project,
-so host names never end up in a commit. `D` then `e` opens that file; see
+so host names never end up in a commit. `D` then `e` opens the same form
+for the selected target, `x` deletes it, and `E` opens the whole file in
+your editor; see
 [Configuration](../reference/config.md#per-project-settings) for every
 setting.
 
@@ -87,7 +93,9 @@ step by step.
 | `u` | roll back: put the newest backup back |
 | `l` | list the program and its backups on the machine |
 | `a` | add another target |
-| `e` | edit the targets in your editor |
+| `e` | edit the selected target in the form |
+| `x` | delete the selected target (only from the settings; nothing on the machine) |
+| `E` | open the settings file in your editor |
 | `Esc` | close |
 
 A deploy runs these steps in the output pane:
@@ -98,13 +106,47 @@ A deploy runs these steps in the output pane:
    its place. Because it's a rename, a program that is running can be
    replaced. Mode and owner stay the same. If the new build is identical to
    what's there, nothing changes and no backup is made.
-4. **Restart**, if you set a restart command.
+4. **Restart** the systemd service and check that it runs, if you set one.
+5. **Run the restart command**, if you set one.
 
 Only the newest 3 backups are kept (`keep` in the settings). `u` puts the
 newest one back; press it again to go back one more.
 
 The script that ran is kept in `~/.local/state/mainframe/deploy/`, so you
 can read exactly what happened.
+
+### Running it as a systemd service
+
+Set "service" to a name, like `myapp`, and after the swap the deploy runs
+`systemctl restart myapp` and waits two seconds. If the service isn't
+running then, the deploy fails and shows its status and last log lines.
+`u` rolls back, and restarts the service with the old program.
+
+If there's no such service yet, the first deploy creates a minimal one that
+runs the remote path, enables it so it starts at boot, and starts it:
+
+```ini
+[Unit]
+Description=myapp (deployed with mainframe)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/myapp
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+With sudo, or when you log in as root, it's a system service in
+`/etc/systemd/system/`. Otherwise it's a user service in
+`~/.config/systemd/user/`; for that one to start at boot without you being
+logged in, run `loginctl enable-linger` there once.
+
+Mainframe only creates the unit when there's none, and never changes it
+afterwards. Add arguments, a user or environment variables there, and the
+next deploys keep them.
 
 ### ssh keys and sudo
 

@@ -30,7 +30,9 @@ pub const TEMPLATE: &str = r#"# Mainframe settings for {project}
 #                         # folder as it is; keep_deploy_builds in the main config keeps that checkout
 # artifact = "target/aarch64-unknown-linux-gnu/release/myapp"           # relative to the project root
 # sudo = true             # replace it with sudo (needed for /usr/local/bin and the like)
-# restart = "sudo systemctl restart myapp"   # optional, runs on the remote afterwards
+# service = "myapp"       # optional systemd service: restarted after each deploy and checked that
+#                         # it runs; a minimal unit is created if there's none (never overwritten)
+# restart = "curl -fsS localhost:8080/health"   # optional, any command run on the remote afterwards
 # keep = 3                # backups to keep on the remote; 0 keeps all
 # ssh = ""                # extra ssh options, e.g. "-p 2222 -i ~/.ssh/pi"
 # interactive = false     # true: runs in the real terminal, for ssh / sudo passwords
@@ -62,6 +64,8 @@ pub struct Deploy {
     pub from: String,
     pub artifact: String,
     pub sudo: bool,
+    /// A systemd service on the remote, restarted (and created if missing) after the swap.
+    pub service: String,
     pub restart: String,
     pub keep: usize,
     pub ssh: String,
@@ -79,6 +83,7 @@ impl Default for Deploy {
             from: String::new(),
             artifact: String::new(),
             sudo: false,
+            service: String::new(),
             restart: String::new(),
             keep: 3,
             ssh: String::new(),
@@ -149,6 +154,69 @@ pub fn append_deploy(root: &Path, d: &Deploy) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Puts `d` in place of the `idx`th target in the file; the rest of the file, comments
+/// included, stays as it is.
+pub fn replace_deploy(root: &Path, idx: usize, d: &Deploy) -> io::Result<PathBuf> {
+    rewrite_deploy(root, idx, Some(d))
+}
+
+pub fn remove_deploy(root: &Path, idx: usize) -> io::Result<PathBuf> {
+    rewrite_deploy(root, idx, None)
+}
+
+fn rewrite_deploy(root: &Path, idx: usize, d: Option<&Deploy>) -> io::Result<PathBuf> {
+    let path = file_for(root);
+    let text = fs::read_to_string(&path)?;
+    let new = with_deploy(&text, idx, d).ok_or_else(|| {
+        io::Error::other(format!("couldn't find that target in {} — E edits the file", config::pretty_path(&path)))
+    })?;
+    fs::write(&path, new)?;
+    Ok(path)
+}
+
+/// `text` with its `idx`th `[[deploy]]` table replaced by `d`, or removed. None when the
+/// tables can't be told apart safely, or the result wouldn't read back as intended.
+fn with_deploy(text: &str, idx: usize, d: Option<&Deploy>) -> Option<String> {
+    let before: ProjectSettings = toml::from_str(text).ok()?;
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let header = |l: &str| l.trim_start().starts_with('[');
+    let starts: Vec<usize> = (0..lines.len())
+        .filter(|&i| {
+            let t = lines[i].trim();
+            t == "[[deploy]]" || t.strip_prefix("[[deploy]]").is_some_and(|r| r.trim_start().starts_with('#'))
+        })
+        .collect();
+    if starts.len() != before.deploy.len() {
+        return None;
+    }
+    let start = *starts.get(idx)?;
+    let mut end = (start + 1..lines.len()).find(|&i| header(lines[i])).unwrap_or(lines.len());
+    // Comments and blank lines just above the next table belong to that one.
+    while end > start + 1 && { let t = lines[end - 1].trim(); t.is_empty() || t.starts_with('#') } {
+        end -= 1;
+    }
+    let mut out: String = lines[..start].concat();
+    if let Some(d) = d {
+        out += render_deploy(d).trim_start_matches('\n');
+    } else {
+        // Drop the blank line that separated it, too.
+        while out.ends_with("\n\n") {
+            out.pop();
+        }
+    }
+    out += &lines[end..].concat();
+
+    let after: ProjectSettings = toml::from_str(&out).ok()?;
+    let mut want = before.deploy;
+    match d {
+        Some(d) => want[idx] = d.clone(),
+        None => {
+            want.remove(idx);
+        }
+    }
+    (after.deploy == want && after.actions.len() == before.actions.len()).then_some(out)
+}
+
 fn render_deploy(d: &Deploy) -> String {
     let s = |v: &str| toml::Value::String(v.to_string()).to_string();
     let def = Deploy::default();
@@ -162,7 +230,7 @@ fn render_deploy(d: &Deploy) -> String {
     }
     out += &format!("artifact = {}\n", s(&d.artifact));
     out += &format!("sudo = {}\n", d.sudo);
-    for (k, v, dv) in [("restart", &d.restart, &def.restart), ("ssh", &d.ssh, &def.ssh), ("key", &d.key, &def.key)] {
+    for (k, v, dv) in [("service", &d.service, &def.service), ("restart", &d.restart, &def.restart), ("ssh", &d.ssh, &def.ssh), ("key", &d.key, &def.key)] {
         if v != dv {
             out += &format!("{k} = {}\n", s(v));
         }
@@ -196,6 +264,12 @@ impl Deploy {
         }
         if self.from.trim().contains(char::is_whitespace) {
             return Some("from must be one branch or commit, like main".into());
+        }
+        if !self.service.trim().chars().all(|c| c.is_ascii_alphanumeric() || "-_.@:".contains(c)) {
+            return Some("service must be a systemd unit name, like myapp".into());
+        }
+        if !self.key.trim().is_empty() && !config::valid_key(self.key.trim()) {
+            return Some(format!("key {:?} isn't a key mainframe knows, like F9 or ctrl-d", self.key.trim()));
         }
         None
     }
@@ -242,10 +316,25 @@ impl Deploy {
             path = self.remote_path,
             name = self.remote_file_name(),
         ));
+        if let Some(svc) = self.unit() {
+            steps.push(format!("restart {svc} and check that it runs (created if it doesn't exist)"));
+        }
         if !self.restart.trim().is_empty() {
             steps.push(format!("on {}: {}", self.host, self.restart.trim()));
         }
         steps
+    }
+
+    /// `service` as a unit name: `myapp` → `myapp.service`.
+    fn unit(&self) -> Option<String> {
+        let s = self.service.trim();
+        if s.is_empty() {
+            None
+        } else if s.contains('.') {
+            Some(s.to_string())
+        } else {
+            Some(format!("{s}.service"))
+        }
     }
 
     fn sudo_prefix(&self) -> &'static str {
@@ -454,12 +543,76 @@ echo "$(ls -1d "$dst".bak-* 2>/dev/null | wc -l) older backup(s) left"
     }
 
     fn push_restart(&self, out: &mut String, after: &str) {
+        if let Some(svc) = self.unit() {
+            *out += &format!("step {}\n", quote_str(&format!("restart {svc}")));
+            *out += &format!(
+                "{} || fail {}\n",
+                self.remote(&self.service_script(&svc), true),
+                quote_str(&format!("{svc} isn't running — {after}"))
+            );
+        }
         let restart = self.restart.trim();
         if restart.is_empty() {
             return;
         }
         *out += &format!("step {}\n", quote_str(&format!("restart · {restart}")));
         *out += &format!("{} || fail {}\n", self.remote(restart, true), quote_str(&format!("restart failed — {after}")));
+    }
+}
+
+impl Deploy {
+    /// Remote half of `service`: a system unit with sudo or as root, else a user unit.
+    /// A unit that's there is only restarted; a missing one gets a minimal unit that
+    /// runs `remote_path`, which you can edit there afterwards.
+    fn service_script(&self, svc: &str) -> String {
+        let s = self.sudo_prefix();
+        let exec = if self.remote_path.contains(char::is_whitespace) {
+            format!("\"{}\"", self.remote_path)
+        } else {
+            self.remote_path.clone()
+        };
+        let lines = [
+            "[Unit]".to_string(),
+            format!("Description={} (deployed with mainframe)", self.remote_file_name()),
+            "After=network-online.target".into(),
+            "Wants=network-online.target".into(),
+            String::new(),
+            "[Service]".into(),
+            format!("ExecStart={exec}"),
+            "Restart=on-failure".into(),
+            String::new(),
+            "[Install]".into(),
+            "WantedBy=$wanted".into(),
+        ];
+        // $wanted is filled in by the remote shell; everything else is literal.
+        let unit_text = lines.iter().map(|l| if l.contains("$wanted") { format!("\"{l}\"") } else { quote_str(l) }).collect::<Vec<_>>().join(" ");
+        format!(
+            r#"set -e
+svc={svc}
+if [ -n "{s}" ] || [ "$(id -u)" = 0 ]; then
+  sc="{s}systemctl"; unit="/etc/systemd/system/$svc"; wanted=multi-user.target; logs="{s}journalctl"
+else
+  sc="systemctl --user"; unit="$HOME/.config/systemd/user/$svc"; wanted=default.target; logs="journalctl --user"
+  mkdir -p "$(dirname "$unit")"
+fi
+if ! $sc cat "$svc" >/dev/null 2>&1; then
+  printf '%s\n' {unit_text} | {s}tee "$unit" >/dev/null
+  $sc daemon-reload
+  $sc enable -q "$svc"
+  echo "created $unit — edit it there for arguments, user or environment"
+fi
+$sc restart "$svc"
+sleep 2
+if $sc is-active -q "$svc"; then
+  echo "✔ $svc is running"
+else
+  $sc status --no-pager -l "$svc" || true
+  $logs -u "$svc" -n 20 --no-pager -q 2>/dev/null || true
+  exit 1
+fi
+"#,
+            svc = quote_str(svc),
+        )
     }
 }
 
@@ -525,6 +678,85 @@ mod tests {
     }
 
     #[test]
+    fn edits_one_table_and_keeps_the_rest() {
+        let a = Deploy { name: "a".into(), ..pi() };
+        let b = Deploy { name: "b".into(), service: "myapp".into(), ..pi() };
+        let text = template(Path::new("/x"))
+            + &render_deploy(&a)
+            + "# about b\n"
+            + &render_deploy(&b)
+            + "\n[[actions]]\nkey = \"F6\"\nname = \"logs\"\ncmd = \"true\"\n";
+        let b2 = Deploy { host: "other".into(), keep: 0, key: "F9".into(), ..b.clone() };
+        let edited = with_deploy(&text, 1, Some(&b2)).unwrap();
+        assert!(edited.contains("# about b\n\n[[deploy]]\nname = \"b\"\nhost = \"other\"") && edited.contains("# Mainframe settings"));
+        let s: ProjectSettings = toml::from_str(&edited).unwrap();
+        assert_eq!(s.deploy, vec![a.clone(), b2]);
+        assert_eq!(s.actions.len(), 1);
+
+        let removed = with_deploy(&text, 0, None).unwrap();
+        let s: ProjectSettings = toml::from_str(&removed).unwrap();
+        assert_eq!(s.deploy, vec![b.clone()]);
+        assert!(removed.contains("# about b"));
+        assert!(with_deploy(&text, 2, None).is_none());
+        // Tables written some other way aren't guessed at.
+        assert!(with_deploy("deploy = [{ name = \"a\", host = \"h\" }]\n", 0, None).is_none());
+    }
+
+    /// The remote half of `service` against stub systemctl/journalctl: creates the unit
+    /// when it's missing, only restarts it after that, fails when it doesn't come up.
+    #[test]
+    fn service_is_created_once_then_restarted() {
+        let base = std::env::temp_dir().join(format!("mainframe-service-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let bin = base.join("bin");
+        let home = base.join("home");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let log = base.join("log");
+        // `cat` works once the unit file exists; `is-active` fails when $DOWN is set.
+        let stub = format!(
+            "#!/bin/sh\n[ \"$1\" = --user ] && shift\necho \"$*\" >> {log}\ncase $1 in\n  cat) [ -f \"$HOME/.config/systemd/user/$2\" ];;\n  is-active) [ -z \"$DOWN\" ];;\nesac\n",
+            log = log.display()
+        );
+        fs::write(bin.join("systemctl"), stub).unwrap();
+        fs::write(bin.join("journalctl"), "#!/bin/sh\necho logs\n").unwrap();
+        fs::write(bin.join("sleep"), "#!/bin/sh\n").unwrap();
+        Command::new("chmod").args(["+x"]).arg(bin.join("systemctl")).arg(bin.join("journalctl")).arg(bin.join("sleep")).status().unwrap();
+
+        let d = Deploy { sudo: false, service: "my app".replace(' ', "-"), remote_path: "/opt/my app/run".into(), ..pi() };
+        let script = d.service_script(&d.unit().unwrap());
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let run = |down: bool| {
+            let mut c = Command::new("sh");
+            c.args(["-c", &script]).env("PATH", &path).env("HOME", &home);
+            if down {
+                c.env("DOWN", "1");
+            }
+            c.output().unwrap()
+        };
+        if String::from_utf8_lossy(&Command::new("id").arg("-u").output().unwrap().stdout).trim() == "0" {
+            return; // as root it'd write to /etc/systemd/system
+        }
+
+        let first = run(false);
+        assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+        let unit = fs::read_to_string(home.join(".config/systemd/user/my-app.service")).unwrap();
+        assert!(unit.contains("ExecStart=\"/opt/my app/run\"\n") && unit.contains("WantedBy=default.target"), "{unit}");
+        let calls = fs::read_to_string(&log).unwrap();
+        assert!(calls.contains("daemon-reload") && calls.contains("enable -q my-app.service") && calls.contains("restart my-app.service"));
+
+        fs::write(&log, "").unwrap();
+        assert!(run(false).status.success());
+        let calls = fs::read_to_string(&log).unwrap();
+        assert!(!calls.contains("enable") && calls.contains("restart my-app.service"), "{calls}");
+
+        let down = run(true);
+        assert!(!down.status.success());
+        assert!(String::from_utf8_lossy(&down.stdout).contains("logs"));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn template_parses_empty() {
         let s: ProjectSettings = toml::from_str(&template(Path::new("/x"))).unwrap();
         assert!(s.deploy.is_empty() && s.actions.is_empty());
@@ -546,7 +778,7 @@ mod tests {
     fn scripts_are_valid_sh() {
         let root = Path::new("/home/u/proj");
         let from = Deploy { from: "main".into(), ..pi() };
-        let cross = Deploy { build: "RUSTFLAGS=x cross build".into(), ..pi() };
+        let cross = Deploy { build: "RUSTFLAGS=x cross build".into(), service: "myapp".into(), ..pi() };
         for d in [pi(), from, cross, Deploy { sudo: false, interactive: true, build: String::new(), restart: String::new(), keep: 0, ..pi() }] {
             assert!(sh_syntax_ok(&d.script(root, false)), "{}", d.script(root, false));
             assert!(sh_syntax_ok(&d.script(root, true)), "{}", d.script(root, true));

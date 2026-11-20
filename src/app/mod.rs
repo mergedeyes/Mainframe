@@ -124,6 +124,8 @@ pub enum Confirmed {
     RemoveWorktree { path: PathBuf, main: PathBuf, force: bool },
     /// Put a deploy target's newest backup back (target, project root).
     Rollback(Box<Deploy>, PathBuf),
+    /// Delete a deploy target from the settings (name, index, project root).
+    RemoveDeploy(String, usize, PathBuf),
 }
 
 
@@ -698,6 +700,7 @@ impl App {
             Confirmed::Preset(dir) => self.apply_preset(&dir),
             Confirmed::RemoveWorktree { path, main, force } => self.remove_worktree(&path, main, force),
             Confirmed::Rollback(d, root) => self.run_deploy(&d, &root, deploy::Run::Rollback),
+            Confirmed::RemoveDeploy(name, idx, root) => self.remove_deploy(&name, idx, &root),
         }
     }
 }

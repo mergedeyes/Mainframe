@@ -16,6 +16,7 @@ use crate::{
     config,
     form::{Field, Form, FormKind},
     install,
+    line::LineEdit,
     project::{self, Kind, Op, Plan, quote},
     settings::{self, Deploy, ProjectSettings},
 };
@@ -89,7 +90,20 @@ impl App {
             KeyCode::Char('j') | KeyCode::Down => picker.state.select(Some((cur + 1).min(len.saturating_sub(1)))),
             KeyCode::Char('k') | KeyCode::Up => picker.state.select(Some(cur.saturating_sub(1))),
             KeyCode::Char('a') => self.new_deploy_form(),
-            KeyCode::Char('e') => self.edit_settings(&root),
+            KeyCode::Char('e') => {
+                if let Some(d) = target {
+                    self.edit_deploy_form(cur, &d);
+                }
+            }
+            KeyCode::Char('E') => self.edit_settings(&root),
+            KeyCode::Char('x') | KeyCode::Delete => {
+                if let Some(d) = target {
+                    self.mode = Mode::Confirm {
+                        msg: format!("Delete the deploy target {}? Nothing on {} is touched. [y/N]", d.name, d.host),
+                        action: Confirmed::RemoveDeploy(d.name.clone(), cur, root),
+                    };
+                }
+            }
             KeyCode::Enter | KeyCode::Char('D') => {
                 if let Some(d) = target {
                     self.mode = Mode::Normal;
@@ -170,36 +184,72 @@ impl App {
             || fs::read_dir(config::home().join(".ssh"))
                 .is_ok_and(|d| d.flatten().any(|e| e.file_name().to_string_lossy().starts_with("id_")));
         let note = (!has_key).then(|| "no ssh key found — ssh-keygen + ssh-copy-id <host>, or run it in the terminal".to_string());
+        let defaults = Deploy {
+            name,
+            host: "pi@raspberrypi.local".into(),
+            remote_path: format!("/usr/local/bin/{}", guess.bin),
+            build: guess.build,
+            artifact: guess.artifact,
+            sudo: true,
+            ..Deploy::default()
+        };
         self.mode = Mode::Form(Form {
-            kind: FormKind::Deploy { root: root.clone(), taken, keep_build: self.config.keep_deploy_builds },
+            kind: FormKind::Deploy { root: root.clone(), taken, keep_build: self.config.keep_deploy_builds, editing: None },
             title: format!(" new deploy target · {} ", Self::project_title(&root)),
-            fields: vec![
-                Field::text("name", name, "what the picker calls it"),
-                Field::text("host", "pi@raspberrypi.local", "user@host or an alias from ~/.ssh/config"),
-                Field::text("remote path", format!("/usr/local/bin/{}", guess.bin), "the file there that gets replaced"),
-                Field::text("build", guess.build, "runs in the project root · - for none"),
-                Field::text("from", "", "a branch to build, e.g. main, in a separate checkout · empty: this folder as it is"),
-                Field::text("artifact", guess.artifact, "the built file, relative to the project root"),
-                Field::choice("sudo", &["yes", "no"], 0, "replace it as root (needed for /usr/…)"),
-                Field::text("restart", "", "optional, runs there afterwards, e.g. sudo systemctl restart …"),
-                Field::choice("run", &["background", "terminal"], 0, "terminal: when ssh or sudo ask for a password"),
-            ],
+            fields: deploy_fields(&defaults, false),
             step: 0,
             note,
             completer: None,
         });
     }
 
+    /// The form again, filled with target `idx` as it is; saving replaces it in the file.
+    fn edit_deploy_form(&mut self, idx: usize, d: &Deploy) {
+        let root = self.settings_root.clone();
+        let taken: Vec<String> = self.settings.deploy.iter().map(|t| t.name.clone()).filter(|n| *n != d.name).collect();
+        self.mode = Mode::Form(Form {
+            kind: FormKind::Deploy { root: root.clone(), taken, keep_build: self.config.keep_deploy_builds, editing: Some(idx) },
+            title: format!(" edit deploy target {} · {} ", d.name, Self::project_title(&root)),
+            fields: deploy_fields(d, true),
+            step: 0,
+            note: None,
+            completer: None,
+        });
+    }
+
+    /// `x` in the picker, after the y/N.
+    pub(super) fn remove_deploy(&mut self, name: &str, idx: usize, root: &Path) {
+        match settings::remove_deploy(root, idx) {
+            Ok(_) => {
+                self.load_settings(true);
+                if self.settings.deploy.is_empty() {
+                    self.mode = Mode::Normal;
+                } else {
+                    self.open_deploy(self.settings.deploy.get(idx.saturating_sub(1)).map(|d| d.name.clone()).as_deref());
+                }
+                self.set_status(format!("deleted deploy target {name}"), Level::Ok);
+            }
+            Err(e) => self.set_status(format!("can't delete {name}: {e}"), Level::Err),
+        }
+    }
+
     /// Saves the form's target and shows it in the picker. False keeps the form open.
     pub(super) fn submit_deploy_form(&mut self, form: &Form) -> bool {
-        let FormKind::Deploy { root, taken, .. } = &form.kind else { return true };
+        let FormKind::Deploy { root, taken, editing, .. } = &form.kind else { return true };
         let d = deploy_from_form(form);
-        let problem = d.problem().or_else(|| taken.contains(&d.name).then(|| format!("there's a target named {} already", d.name)));
+        let problem = d
+            .problem()
+            .or_else(|| form.get("keep").trim().parse::<usize>().is_err().then(|| "keep must be a number; 0 keeps all backups".into()))
+            .or_else(|| taken.contains(&d.name).then(|| format!("there's a target named {} already", d.name)));
         if let Some(p) = problem {
             self.set_status(p, Level::Err);
             return false;
         }
-        match settings::append_deploy(root, &d) {
+        let saved = match editing {
+            Some(idx) => settings::replace_deploy(root, *idx, &d),
+            None => settings::append_deploy(root, &d),
+        };
+        match saved {
             Ok(path) => {
                 self.open_deploy(Some(&d.name));
                 self.set_status(format!("saved to {} — Enter deploys, e edits", config::pretty_path(&path)), Level::Ok);
@@ -222,10 +272,43 @@ pub fn deploy_from_form(form: &Form) -> Deploy {
         from: from.to_string(),
         artifact: form.get("artifact").trim().to_string(),
         sudo: form.get("sudo") == "yes",
+        service: form.get("service").trim().trim_end_matches(".service").to_string(),
         restart: form.get("restart").trim().to_string(),
+        keep: form.get("keep").trim().parse().unwrap_or(Deploy::default().keep),
+        ssh: form.get("ssh").trim().to_string(),
         interactive: form.get("run") == "terminal",
-        ..Deploy::default()
+        key: form.get("key").trim().to_string(),
     }
+}
+
+/// The form's fields for `d`. A new target shows its values as defaults that Enter takes;
+/// an edited one has them typed in already, so they can be changed or cleared.
+fn deploy_fields(d: &Deploy, edit: bool) -> Vec<Field> {
+    let text = |label, value: &str, hint: &str| {
+        if edit {
+            let mut f = Field::text(label, "", hint);
+            f.input = LineEdit::new(value);
+            f
+        } else {
+            Field::text(label, value, hint)
+        }
+    };
+    let build_hint = if edit { "runs in the project root · empty: none" } else { "runs in the project root · - for none" };
+    vec![
+        text("name", &d.name, "what the picker calls it"),
+        text("host", &d.host, "user@host or an alias from ~/.ssh/config"),
+        text("remote path", &d.remote_path, "the file there that gets replaced"),
+        text("build", &d.build, build_hint),
+        text("from", &d.from, "a branch to build, e.g. main, in a separate checkout · empty: this folder as it is"),
+        text("artifact", &d.artifact, "the built file, relative to the project root"),
+        Field::choice("sudo", &["yes", "no"], usize::from(!d.sudo), "replace it as root (needed for /usr/…)"),
+        text("service", &d.service, "systemd service: restarted and checked, created if missing · empty: none"),
+        text("restart", &d.restart, "optional, any command run there afterwards"),
+        text("keep", &d.keep.to_string(), "backups to keep there · 0 keeps all"),
+        text("ssh", &d.ssh, "extra ssh options, e.g. -p 2222 -i ~/.ssh/pi"),
+        text("key", &d.key, "optional key that deploys without the picker, e.g. F9"),
+        Field::choice("run", &["background", "terminal"], usize::from(d.interactive), "terminal: when ssh or sudo ask for a password"),
+    ]
 }
 
 struct Guess {
