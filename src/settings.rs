@@ -366,8 +366,10 @@ echo "✔ replaced $dst"
             // The project may be a subfolder of the repo: the same subfolder of the checkout.
             if p.is_absolute() { quote(&p) } else { format!("\"$work/$prefix\"{}", quote(&p)) }
         };
-        if !self.build.trim().is_empty() {
-            out += &format!("step {}\n(\n{}\n) || fail 'build failed — nothing was copied'\n", quote_str(&format!("build · {}", self.build.trim())), self.build.trim());
+        let build = self.build.trim();
+        if !build.is_empty() {
+            let hide = if runs_cross(build) { HIDE_CARGO_CONFIG } else { "" };
+            out += &format!("step {}\n(\n{hide}{build}\n) || fail 'build failed — nothing was copied'\n", quote_str(&format!("build · {build}")));
         }
         out += &format!("a={artifact}\n[ -f \"$a\" ] || fail \"no file at $a — check artifact in the deploy settings\"\n");
         out += &format!("step \"copy $(du -h \"$a\" | cut -f1) → \"{}\n", quote_str(self.host.trim()));
@@ -464,6 +466,20 @@ echo "$(ls -1d "$dst".bak-* 2>/dev/null | wc -l) older backup(s) left"
 const PRELUDE: &str = "step() { printf '\\033[1;36m── %s\\033[0m\\n' \"$1\"; }\n\
 fail() { printf '\\033[1;31m✘ %s\\033[0m\\n' \"$1\"; exit 1; }\n";
 
+/// cross mounts your cargo home into its container, config included, and settings made
+/// for this machine (an sccache wrapper, `linker = "clang"`, mold) break the build in
+/// there. The container sees an empty file in place of the config; yours isn't touched.
+const HIDE_CARGO_CONFIG: &str = r#"for f in config.toml config; do
+  [ ! -f "${CARGO_HOME:-$HOME/.cargo}/$f" ] || CROSS_CONTAINER_OPTS="${CROSS_CONTAINER_OPTS:+$CROSS_CONTAINER_OPTS }-v /dev/null:/cargo/$f:ro"
+done
+export CROSS_CONTAINER_OPTS
+"#;
+
+/// Whether a build command calls `cross`, like `RUSTFLAGS=… cross build` or `npm ci && cross build`.
+fn runs_cross(build: &str) -> bool {
+    build.split(|c: char| c.is_whitespace() || "&|;()".contains(c)).any(|w| w == "cross")
+}
+
 /// Where the script for a run is written, so the output pane shows a short command and
 /// you can read exactly what ran.
 pub fn script_file(root: &Path, name: &str, what: &str) -> PathBuf {
@@ -499,6 +515,16 @@ mod tests {
     }
 
     #[test]
+    fn spots_cross() {
+        assert!(runs_cross("RUSTFLAGS='-C x' cross build --release"));
+        assert!(runs_cross("npm ci&&cross build"));
+        assert!(!runs_cross("cargo build && echo across"));
+        let root = Path::new("/x");
+        assert!(Deploy { build: "cross build".into(), ..pi() }.script(root, false).contains("CROSS_CONTAINER_OPTS"));
+        assert!(!pi().script(root, false).contains("CROSS_CONTAINER_OPTS"));
+    }
+
+    #[test]
     fn template_parses_empty() {
         let s: ProjectSettings = toml::from_str(&template(Path::new("/x"))).unwrap();
         assert!(s.deploy.is_empty() && s.actions.is_empty());
@@ -520,7 +546,8 @@ mod tests {
     fn scripts_are_valid_sh() {
         let root = Path::new("/home/u/proj");
         let from = Deploy { from: "main".into(), ..pi() };
-        for d in [pi(), from, Deploy { sudo: false, interactive: true, build: String::new(), restart: String::new(), keep: 0, ..pi() }] {
+        let cross = Deploy { build: "RUSTFLAGS=x cross build".into(), ..pi() };
+        for d in [pi(), from, cross, Deploy { sudo: false, interactive: true, build: String::new(), restart: String::new(), keep: 0, ..pi() }] {
             assert!(sh_syntax_ok(&d.script(root, false)), "{}", d.script(root, false));
             assert!(sh_syntax_ok(&d.script(root, true)), "{}", d.script(root, true));
             assert!(sh_syntax_ok(&d.rollback_script()));

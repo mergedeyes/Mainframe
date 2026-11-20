@@ -66,6 +66,10 @@ The first time you press `D` in a project, a form asks for the target:
 
 For a Rust project, the form suggests an ARM build for a Raspberry Pi, with
 [cross](https://github.com/cross-rs/cross) when it's installed.
+cross mounts `~/.cargo` into its container, and settings in
+`~/.cargo/config.toml` made for your machine (an sccache wrapper, a clang or
+mold linker) would break the build in there, so a build that runs `cross`
+hides that file from the container. Your file stays as it is.
 
 The target is saved in `~/.config/mainframe/projects/`, outside the project,
 so host names never end up in a commit. `D` then `e` opens that file; see
