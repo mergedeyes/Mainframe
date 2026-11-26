@@ -9,6 +9,8 @@ use serde::Deserialize;
 
 pub const TEMPLATE: &str = r#"# Mainframe config
 #
+# Settings can go anywhere in this file, also below a [section]: Mainframe finds them.
+#
 # Placeholders usable in commands (all shell-quoted automatically):
 #   {file}  selected entry (absolute path)
 #   {name}  selected entry's file name
@@ -167,12 +169,95 @@ impl Config {
         let Ok(text) = fs::read_to_string(&path) else {
             return (Self::default(), None);
         };
-        match toml::from_str(&text) {
+        match parse(&text) {
             Ok(cfg) => (cfg, None),
-            Err(e) => (Self::default(), Some(format!("config error: {}", e.message()))),
+            Err(e) => (Self::default(), Some(format!("config error, {e}"))),
         }
     }
+}
 
+/// The settings at the top of config.toml. TOML puts every key below a `[section]`
+/// header into that section, and a section can't be closed. None of these names means
+/// anything inside a section, so wherever one ends up, it's moved back to the top.
+const TOP_LEVEL: [&str; 11] = [
+    "editor",
+    "vscode",
+    "install_dir",
+    "projects_dir",
+    "show_hidden",
+    "preview",
+    "zoxide",
+    "desktop_entries",
+    "notify_after",
+    "keep_deploy_builds",
+    "prune_gone_branches",
+];
+
+/// Reads config.toml with the settings wherever they are. Errors start with the line.
+fn parse(text: &str) -> Result<Config, String> {
+    let mut table: toml::Table = text.parse().map_err(|e: toml::de::Error| {
+        let line = e.span().map_or(String::new(), |s| format!("line {}: ", line_of(text, s.start)));
+        format!("{line}{}", e.message().trim())
+    })?;
+    hoist(&mut table, text)?;
+    Config::deserialize(table.clone()).map_err(|e| {
+        // Deserializing a table forgets where things were: try each setting alone to find the one.
+        let culprit = table.iter().find(|(k, v)| {
+            let alone: toml::Table = [((*k).clone(), (*v).clone())].into_iter().collect();
+            Config::deserialize(alone).is_err()
+        });
+        match culprit.and_then(|(k, _)| key_lines(text, k).first().map(|l| (k, *l))) {
+            Some((k, line)) => format!("line {line}, {k}: {}", e.message().trim()),
+            None => e.message().trim().to_string(),
+        }
+    })
+}
+
+/// Moves top-level settings that landed in a section (`[runners]`, an `[[actions]]` entry)
+/// back to the top.
+fn hoist(table: &mut toml::Table, text: &str) -> Result<(), String> {
+    let mut moved = Vec::new();
+    for (section, value) in table.iter_mut() {
+        let inner: Vec<&mut toml::Table> = match value {
+            toml::Value::Table(t) => vec![t],
+            toml::Value::Array(items) => items.iter_mut().filter_map(toml::Value::as_table_mut).collect(),
+            _ => continue,
+        };
+        for t in inner {
+            for key in TOP_LEVEL {
+                if let Some(v) = t.remove(key) {
+                    moved.push((key, v, section.clone()));
+                }
+            }
+        }
+    }
+    for (key, value, section) in moved {
+        if table.contains_key(key) {
+            let lines: Vec<String> = key_lines(text, key).iter().map(usize::to_string).collect();
+            return Err(format!("{key} is set twice (lines {}), once under [{section}]", lines.join(" and ")));
+        }
+        table.insert(key.to_string(), value);
+    }
+    Ok(())
+}
+
+/// The 1-based line of byte `pos`.
+fn line_of(text: &str, pos: usize) -> usize {
+    text[..pos.min(text.len())].matches('\n').count() + 1
+}
+
+/// The lines that set `key`, or open it as a `[key]` / `[[key]]` section.
+fn key_lines(text: &str, key: &str) -> Vec<usize> {
+    let sets = |l: &str| {
+        let l = l.trim_start();
+        l.strip_prefix(key).is_some_and(|rest| rest.trim_start().starts_with('='))
+            || l.starts_with(&format!("[{key}]"))
+            || l.starts_with(&format!("[[{key}]]"))
+    };
+    text.lines().enumerate().filter(|(_, l)| sets(l)).map(|(i, _)| i + 1).collect()
+}
+
+impl Config {
     pub fn install_dir(&self) -> PathBuf {
         expand_tilde(&self.install_dir)
     }
@@ -260,4 +345,48 @@ fn parse_key(s: &str) -> Option<(KeyCode, KeyModifiers)> {
         c => c,
     };
     Some((code, mods))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every setting in the template is one Mainframe moves back to the top, and the other way round.
+    #[test]
+    fn top_level_matches_the_template() {
+        let t: toml::Table = TEMPLATE.parse().unwrap();
+        let mut in_template: Vec<&str> = t.iter().filter(|(_, v)| !v.is_table()).map(|(k, _)| k.as_str()).collect();
+        let mut known = TOP_LEVEL.to_vec();
+        in_template.sort();
+        known.sort();
+        assert_eq!(in_template, known);
+        assert!(parse(TEMPLATE).is_ok());
+    }
+
+    /// A setting below [runners] or in an [[actions]] entry still counts, and doesn't break them.
+    #[test]
+    fn settings_work_below_a_section() {
+        let text = "editor = \"vim\"\n[runners]\npy = \"python3 {file}\"\nprune_gone_branches = true\n\n\
+                    [[actions]]\nkey = \"F5\"\nname = \"x\"\ncmd = \"x\"\nnotify_after = 3\n";
+        let cfg = parse(text).unwrap();
+        assert!(cfg.prune_gone_branches);
+        assert_eq!(cfg.notify_after, 3);
+        assert_eq!(cfg.editor, "vim");
+        assert_eq!(cfg.runners.len(), 1);
+        assert_eq!(cfg.actions.len(), 1);
+    }
+
+    #[test]
+    fn errors_say_the_line() {
+        let wrong_type = "editor = \"vim\"\n\nnotify_after = \"soon\"\n";
+        assert!(parse(wrong_type).unwrap_err().starts_with("line 3, notify_after: invalid type"));
+        let moved_wrong = "[runners]\npy = \"x\"\nshow_hidden = \"yes\"\n";
+        assert!(parse(moved_wrong).unwrap_err().starts_with("line 3, show_hidden:"));
+        let broken = "editor = \"vim\"\nlist = [\n";
+        assert!(parse(broken).unwrap_err().starts_with("line 2"), "{}", parse(broken).unwrap_err());
+        let twice = "zoxide = true\n[runners]\nzoxide = false\n";
+        assert_eq!(parse(twice).unwrap_err(), "zoxide is set twice (lines 1 and 3), once under [runners]");
+        let bad_runner = "[runners]\npy = 3\n";
+        assert!(parse(bad_runner).unwrap_err().starts_with("line 1, runners:"));
+    }
 }
