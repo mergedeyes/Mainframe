@@ -58,7 +58,8 @@ unless you ask for it.
   copy, move, trash, git status on every entry, preview with diffs.
 - **Running:** build, release build, test, run single files, task picker,
   output tabs, watch mode, search and save output, jump to `file:line`.
-- **Git:** stage from the list, commit, amend, push another branch, branches,
+- **Git:** stage from the list, commit, amend, push another branch, branches
+  numbered in merge order with their dates, cleanup of merged branches,
   worktrees, stash, a GitHub repo for any folder, releases with CI.
 - **Install and deploy:** install picker with build info and PATH checks,
   desktop entries, deploy targets with backups, rollback and systemd

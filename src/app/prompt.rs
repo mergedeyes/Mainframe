@@ -25,7 +25,6 @@ impl App {
             }
             PromptKind::NewDir => Some(Completer::new(complete::Kind::Dir, false)),
             PromptKind::Command => Some(Completer::new(complete::Kind::Shell, false)),
-            PromptKind::SwitchBranch => Some(Completer::list(git::branches(&self.browser.cwd))),
             PromptKind::PushBranch => Some(Completer::list(git::local_branches(&self.browser.cwd))),
             PromptKind::RemoveWorktree => {
                 Some(Completer::list(git::worktrees(&self.browser.cwd).iter().skip(1).map(|w| w.name()).collect()))
@@ -133,10 +132,6 @@ impl App {
                 let add = if all { format!("{GIT} add -A && ") } else { String::new() };
                 let cmd = format!("{add}{GIT} commit -m {}", quote_str(&input));
                 self.start_task("git commit".into(), Plan { cmd, cwd });
-            }
-            PromptKind::SwitchBranch => {
-                let cmd = format!("{GIT} switch {}", quote_str(&input));
-                self.start_task("git switch".into(), Plan { cmd, cwd });
             }
             PromptKind::NewBranch => {
                 let cmd = format!("{GIT} switch -c {}", quote_str(&input));

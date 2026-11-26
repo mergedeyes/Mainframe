@@ -127,7 +127,7 @@ field by field. Every field has a default.
 `s` status · `d` `D` diff, staged diff · `l` log · `L` file history ·
 `w` blame · `a` `A` stage selected, all · `u` unstage · `c` commit · `C`
 stage all and commit · `e` amend · `x` discard changes · `f` fetch · `p`
-pull · `P` push · `B` push another branch · `b` branches · `o` switch · `n`
+pull · `P` push · `B` push another branch · `b` branches · `o` switch branch · `n`
 new branch · `W` remove a worktree · `z` `Z` stash, pop · `r` release ·
 `R` releases and CI · `i` init · `h` GitHub repo · `g` lazygit, gitui or
 tig. See [Git](../guides/git.md).
@@ -137,6 +137,9 @@ tig. See [Git](../guides/git.md).
 **Project picker (`J`):** type to filter · `Enter` go · `Ctrl-T` notes ·
 `Ctrl-O` VS Code · `Ctrl-G` new project · `Ctrl-L` CLAUDE.md preset · `Esc`
 close
+
+**Branch picker (`g o`):** type to filter · `Enter` switch · `Esc` close.
+Numbered in merge order; see [Git](../guides/git.md#switching-branches-in-merge-order).
 
 **Task picker (`T`):** type to filter · `Enter` run · `Ctrl-R` run in the
 full terminal · `Esc` close
