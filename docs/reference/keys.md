@@ -149,7 +149,7 @@ full terminal · `Esc` close
 
 In these three, ↓ ↑, `Tab` Shift-Tab and `Ctrl-N` `Ctrl-P` move.
 
-**Install picker (`i`):** `Enter` or `i` install · `r` run · `d` desktop
+**Install picker (`i`):** `Enter` or `i` install · `p` pull, then install · `r` run · `d` desktop
 entry · `u` remove a copy that shadows it on PATH · `Esc` close
 
 **Desktop entry review:** `Enter` or `y` update · `n` skip · `j` `k` scroll

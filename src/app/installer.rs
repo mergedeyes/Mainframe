@@ -13,6 +13,7 @@ use super::{App, Confirmed, Level, Mode};
 use crate::{
     config::{self, DesktopMode},
     desktop::{self, DesktopPlan},
+    git,
     install::{self, Candidate},
     project::{self, Kind, Plan, quote, quote_str},
 };
@@ -26,6 +27,8 @@ pub struct InstallPicker {
     pub state: ListState,
     /// Desktop entries for the `cargo install` row.
     pub cargo_desktop: Vec<DesktopPlan>,
+    /// The checkout lacks commits its remote branch has: "main is 8 commits behind origin/main".
+    pub behind: Option<String>,
 }
 
 impl InstallPicker {
@@ -59,12 +62,22 @@ pub struct DesktopReview {
 
 /// What the review was gating.
 pub enum AfterReview {
-    InstallBinary(Box<Candidate>, PathBuf),
-    CargoInstall(PathBuf),
+    /// The candidate, the project root, and what runs first (`p`: pull, maybe rebuild).
+    InstallBinary(Box<Candidate>, PathBuf, Option<String>),
+    CargoInstall(PathBuf, Option<String>),
     Nothing,
 }
 
 impl App {
+    /// Installs, after the review of the desktop entries it changes when the config asks for one.
+    pub(super) fn start_install(&mut self, then: AfterReview, plans: Vec<DesktopPlan>) {
+        let ask = self.config.desktop_entries == DesktopMode::Ask;
+        match self.config.desktop_entries {
+            DesktopMode::Never => self.finish_install(then, Vec::new()),
+            _ => self.review_desktop(then, plans, ask),
+        }
+    }
+
     pub(super) fn open_install_picker(&mut self) {
         let start = match self.browser.selected() {
             Some(e) if e.is_dir => e.path.clone(),
@@ -89,6 +102,9 @@ impl App {
             .and_then(|s| items.iter().position(|c| c.path == s))
             .map(|i| i + cargo as usize)
             .unwrap_or(if cargo && !items.is_empty() { 1 } else { 0 });
+        let behind = git::behind_upstream(&root).map(|(branch, upstream, n)| {
+            format!("{branch} is {n} commit{} behind {upstream}", if n == 1 { "" } else { "s" })
+        });
         self.mode = Mode::Install(InstallPicker {
             root,
             install_dir,
@@ -96,6 +112,7 @@ impl App {
             items,
             state: ListState::default().with_selected(Some(pos)),
             cargo_desktop,
+            behind,
         });
     }
 
@@ -111,15 +128,35 @@ impl App {
                 let root = picker.root.clone();
                 let plans = picker.selected_desktop().to_vec();
                 let then = match picker.selected().cloned() {
-                    Some(c) => AfterReview::InstallBinary(Box::new(c), root),
-                    None => AfterReview::CargoInstall(root),
+                    Some(c) => AfterReview::InstallBinary(Box::new(c), root, None),
+                    None => AfterReview::CargoInstall(root, None),
+                };
+                // An install from a checkout that isn't pulled is the old version: ask first.
+                let behind = picker.behind.clone();
+                self.mode = Mode::Normal;
+                match behind {
+                    Some(behind) => {
+                        self.mode = Mode::Confirm {
+                            msg: format!("{behind}: install without those commits? [y/N] (p in i pulls them first)"),
+                            action: Confirmed::Install(then, plans),
+                        };
+                    }
+                    None => self.start_install(then, plans),
+                }
+            }
+            // Pull (and rebuild when it's a build), then install: the newest version, fetched now.
+            KeyCode::Char('p') => {
+                let root = picker.root.clone();
+                let plans = picker.selected_desktop().to_vec();
+                let then = match picker.selected().cloned() {
+                    Some(c) => match install::pull_first(&c, picker.cargo) {
+                        Ok(before) => AfterReview::InstallBinary(Box::new(c), root, Some(before)),
+                        Err(e) => return self.set_status(e, Level::Info),
+                    },
+                    None => AfterReview::CargoInstall(root, Some(install::PULL.into())),
                 };
                 self.mode = Mode::Normal;
-                let ask = self.config.desktop_entries == DesktopMode::Ask;
-                match self.config.desktop_entries {
-                    DesktopMode::Never => self.finish_install(then, Vec::new()),
-                    _ => self.review_desktop(then, plans, ask),
-                }
+                self.start_install(then, plans);
             }
             KeyCode::Char('d') => {
                 let plans = picker.selected_desktop().to_vec();
@@ -197,9 +234,9 @@ impl App {
 
     pub(super) fn finish_install(&mut self, then: AfterReview, desktop: Vec<DesktopPlan>) {
         match then {
-            AfterReview::InstallBinary(c, root) => self.install_binary(&c, &root),
-            AfterReview::CargoInstall(root) => {
-                let cmd = install::cargo_install_cmd(&self.config.install_dir());
+            AfterReview::InstallBinary(c, root, before) => self.install_binary(&c, &root, before.as_deref()),
+            AfterReview::CargoInstall(root, before) => {
+                let cmd = then_run(before.as_deref(), install::cargo_install_cmd(&self.config.install_dir()));
                 self.start_task("cargo install".into(), Plan { cmd, cwd: root });
             }
             AfterReview::Nothing => {}
@@ -236,7 +273,7 @@ impl App {
         }
     }
 
-    pub(super) fn install_binary(&mut self, c: &Candidate, root: &Path) {
+    pub(super) fn install_binary(&mut self, c: &Candidate, root: &Path, before: Option<&str>) {
         let dest = &c.dest;
         let dir = dest.parent().unwrap_or(Path::new("/"));
         let dir_s = dir.to_string_lossy();
@@ -249,7 +286,15 @@ impl App {
             d = quote_str(&dir_s),
             pretty_dir = config::pretty_path(dir),
         );
-        self.start_task(format!("install {}", c.name), Plan { cmd, cwd: root.to_path_buf() });
+        self.start_task(format!("install {}", c.name), Plan { cmd: then_run(before, cmd), cwd: root.to_path_buf() });
+    }
+}
+
+/// `cmd`, after `before` when there is something to run first.
+fn then_run(before: Option<&str>, cmd: String) -> String {
+    match before {
+        Some(b) => format!("{b} && {cmd}"),
+        None => cmd,
     }
 }
 

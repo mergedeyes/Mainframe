@@ -40,7 +40,8 @@ unless you ask for it.
   the output, `Enter` opens your editor right there. Watch mode reruns the
   tests whenever you save.
 - **Ship it without switching tools.** `i` installs a build on your PATH
-  and updates its desktop entry. `D` builds, copies it to a Pi or a server
+  and updates its desktop entry; `p` in it pulls first, so what you just
+  merged is what gets installed. `D` builds, copies it to a Pi or a server
   over ssh and swaps it in, keeping the old one as a backup. It can build
   a clean `main` while you're in the middle of a feature.
 - **Releases in one go.** `g r` bumps the version, commits it (or opens a
@@ -61,7 +62,8 @@ unless you ask for it.
 - **Git:** stage from the list, commit, amend, push another branch, branches
   numbered in merge order with their dates, cleanup of merged branches,
   worktrees, stash, a GitHub repo for any folder, releases with CI.
-- **Install and deploy:** install picker with build info and PATH checks,
+- **Install and deploy:** install picker with build info, PATH checks, and
+  pull-then-install for the newest version,
   desktop entries, deploy targets with backups, rollback and systemd
   services, set up and edited in the TUI.
 - **Projects:** project picker, notes and todos, new projects with

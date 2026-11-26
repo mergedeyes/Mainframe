@@ -996,18 +996,42 @@ fn branch_remote(b: &git::Branch) -> (String, Color) {
     }
 }
 
+/// "pulls, then " in front of what an install does, when `p` started it.
+fn pulls(before: &Option<String>) -> &'static str {
+    match before {
+        Some(b) if b.contains("cargo build") => "pulls, rebuilds, then ",
+        Some(_) => "pulls, then ",
+        None => "",
+    }
+}
+
 fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
-    let rect = popup(area, 120, picker.len() as u16 + 14);
+    let rect = popup(area, 120, picker.len() as u16 + 14 + picker.behind.is_some() as u16);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(format!(" install from {} ", pretty_path(&picker.root)).bold()), true).title_bottom(
-        Line::from(" Enter install · d desktop entry · r run · u remove shadowing copy · Esc close ")
-            .right_aligned()
-            .fg(DIM),
+        Line::from(
+            " Enter install · p pull, then install · d desktop entry · r run · u remove shadowing copy · Esc close ",
+        )
+        .right_aligned()
+        .fg(DIM),
     );
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let [head, list_area, details] =
-        Layout::vertical([Constraint::Length(1), Constraint::Fill(1), Constraint::Length(8)]).areas(inner);
+    let [warning, head, list_area, details] = Layout::vertical([
+        Constraint::Length(picker.behind.is_some() as u16),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(8),
+    ])
+    .areas(inner);
+    if let Some(behind) = &picker.behind {
+        f.render_widget(
+            Line::from(format!(" ⚠ {behind} — Enter installs the old version, p pulls the new commits first"))
+                .fg(Color::Red)
+                .bold(),
+            warning,
+        );
+    }
 
     let row = |name: &str, kind: &str, arch: &str, size: &str, age: &str| {
         format!(
@@ -1295,11 +1319,13 @@ fn draw_desktop_review(f: &mut Frame, review: &DesktopReview, area: Rect) {
         ]),
     ];
     match &review.then {
-        AfterReview::InstallBinary(c, _) => head.push(Line::from(vec![
+        AfterReview::InstallBinary(c, _, before) => head.push(Line::from(vec![
             label("then"),
-            Span::raw(format!("installs {} → {}", c.name, pretty_path(&c.dest))),
+            Span::raw(format!("{}installs {} → {}", pulls(before), c.name, pretty_path(&c.dest))),
         ])),
-        AfterReview::CargoInstall(_) => head.push(Line::from(vec![label("then"), Span::raw("runs cargo install")])),
+        AfterReview::CargoInstall(_, before) => {
+            head.push(Line::from(vec![label("then"), Span::raw(format!("{}runs cargo install", pulls(before)))]))
+        }
         AfterReview::Nothing => {}
     }
     for note in &plan.notes {
