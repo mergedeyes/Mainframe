@@ -13,6 +13,7 @@ use super::{App, Confirmed, Level, Mode};
 use crate::{
     config::{self, DesktopMode},
     desktop::{self, DesktopPlan},
+    git,
     install::{self, Candidate},
     project::{self, Kind, Plan, quote, quote_str},
 };
@@ -26,6 +27,8 @@ pub struct InstallPicker {
     pub state: ListState,
     /// Desktop entries for the `cargo install` row.
     pub cargo_desktop: Vec<DesktopPlan>,
+    /// The checkout lacks commits its remote branch has: "main is 8 commits behind origin/main".
+    pub behind: Option<String>,
 }
 
 impl InstallPicker {
@@ -65,6 +68,15 @@ pub enum AfterReview {
 }
 
 impl App {
+    /// Installs, after the review of the desktop entries it changes when the config asks for one.
+    pub(super) fn start_install(&mut self, then: AfterReview, plans: Vec<DesktopPlan>) {
+        let ask = self.config.desktop_entries == DesktopMode::Ask;
+        match self.config.desktop_entries {
+            DesktopMode::Never => self.finish_install(then, Vec::new()),
+            _ => self.review_desktop(then, plans, ask),
+        }
+    }
+
     pub(super) fn open_install_picker(&mut self) {
         let start = match self.browser.selected() {
             Some(e) if e.is_dir => e.path.clone(),
@@ -89,6 +101,9 @@ impl App {
             .and_then(|s| items.iter().position(|c| c.path == s))
             .map(|i| i + cargo as usize)
             .unwrap_or(if cargo && !items.is_empty() { 1 } else { 0 });
+        let behind = git::behind_upstream(&root).map(|(branch, upstream, n)| {
+            format!("{branch} is {n} commit{} behind {upstream}", if n == 1 { "" } else { "s" })
+        });
         self.mode = Mode::Install(InstallPicker {
             root,
             install_dir,
@@ -96,6 +111,7 @@ impl App {
             items,
             state: ListState::default().with_selected(Some(pos)),
             cargo_desktop,
+            behind,
         });
     }
 
@@ -114,11 +130,17 @@ impl App {
                     Some(c) => AfterReview::InstallBinary(Box::new(c), root),
                     None => AfterReview::CargoInstall(root),
                 };
+                // An install from a checkout that isn't pulled is the old version: ask first.
+                let behind = picker.behind.clone();
                 self.mode = Mode::Normal;
-                let ask = self.config.desktop_entries == DesktopMode::Ask;
-                match self.config.desktop_entries {
-                    DesktopMode::Never => self.finish_install(then, Vec::new()),
-                    _ => self.review_desktop(then, plans, ask),
+                match behind {
+                    Some(behind) => {
+                        self.mode = Mode::Confirm {
+                            msg: format!("{behind}: install without those commits? g p pulls them first [y/N]"),
+                            action: Confirmed::Install(then, plans),
+                        };
+                    }
+                    None => self.start_install(then, plans),
                 }
             }
             KeyCode::Char('d') => {

@@ -370,6 +370,16 @@ fn count(track: &str, what: &str) -> u32 {
     track.split(", ").find_map(|part| part.strip_prefix(what).map(|n| n.trim().parse().unwrap_or(0))).unwrap_or(0)
 }
 
+/// The checked-out branch, the remote branch it tracks and how many of its commits it
+/// doesn't have yet, when there are any. As of the last fetch: git doesn't know newer ones.
+pub fn behind_upstream(dir: &Path) -> Option<(String, String, usize)> {
+    let out = |args: &[&str]| git(dir, args).map(|o| String::from_utf8_lossy(&o).trim().to_string());
+    let upstream = out(&["rev-parse", "--abbrev-ref", "@{upstream}"])?;
+    let behind: usize = out(&["rev-list", "--count", "HEAD..@{upstream}"])?.parse().ok()?;
+    let branch = out(&["branch", "--show-current"])?;
+    (behind > 0).then_some((branch, upstream, behind))
+}
+
 /// `g f`: fetch from every remote and drop remote branches that are gone. With `prune_local`,
 /// also delete local branches whose remote branch is gone, but only those whose work is in
 /// `base`, so nothing that isn't merged is lost; the others are listed and kept.
@@ -725,6 +735,23 @@ mod branch_tests {
         assert_eq!(left, ["main", "unmerged"]);
         assert!(out.contains("Deleted branch merged"), "{out}");
         assert!(out.contains("kept unmerged"), "{out}");
+    }
+
+    /// After a fetch brought new commits that weren't pulled, the checkout is behind.
+    #[test]
+    fn sees_a_checkout_behind_its_remote() {
+        let (base, repo) = setup("behind");
+        let up_to_date = behind_upstream(&repo);
+        commit(&repo, "two", "2026-02-01T10:00:00");
+        commit(&repo, "three", "2026-02-02T10:00:00");
+        run(&repo, &["push", "-q"]);
+        // Like merging pull requests on GitHub, then fetching without pulling.
+        run(&repo, &["reset", "-q", "--hard", "HEAD~2"]);
+        let behind = behind_upstream(&repo);
+        std::fs::remove_dir_all(&base).unwrap();
+
+        assert_eq!(up_to_date, None);
+        assert_eq!(behind, Some(("main".into(), "origin/main".into(), 2)));
     }
 
     #[test]

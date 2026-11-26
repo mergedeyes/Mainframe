@@ -26,6 +26,13 @@ other executables. For each one it shows:
 | `u` | remove the other copy that comes earlier on your PATH |
 | `Esc` | close |
 
+When the branch you have checked out is behind its remote branch, the
+picker says so at the top ("main is 8 commits behind origin/main"), and
+installing asks first. That happens after merging pull requests on GitHub
+and fetching: the new commits are known, but the files on disk are still
+the old ones until `g p` pulls them. Mainframe only knows commits up to
+your last fetch, so after merging, `g p` before `i` is the safe order.
+
 Installing copies the program to `~/.local/bin` (`install_dir` in the
 [configuration](../reference/config.md)). In a Cargo project, the first row
 runs `cargo install --path .` instead.

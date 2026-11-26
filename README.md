@@ -61,7 +61,8 @@ unless you ask for it.
 - **Git:** stage from the list, commit, amend, push another branch, branches
   numbered in merge order with their dates, cleanup of merged branches,
   worktrees, stash, a GitHub repo for any folder, releases with CI.
-- **Install and deploy:** install picker with build info and PATH checks,
+- **Install and deploy:** install picker with build info, PATH checks and a
+  warning when your branch isn't pulled,
   desktop entries, deploy targets with backups, rollback and systemd
   services, set up and edited in the TUI.
 - **Projects:** project picker, notes and todos, new projects with

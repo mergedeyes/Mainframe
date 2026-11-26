@@ -134,6 +134,8 @@ pub enum Confirmed {
     Rollback(Box<Deploy>, PathBuf),
     /// Delete a deploy target from the settings (name, index, project root).
     RemoveDeploy(String, usize, PathBuf),
+    /// Install although the checkout is behind its remote branch.
+    Install(AfterReview, Vec<crate::desktop::DesktopPlan>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -709,6 +711,7 @@ impl App {
             Confirmed::RemoveWorktree { path, main, force } => self.remove_worktree(&path, main, force),
             Confirmed::Rollback(d, root) => self.run_deploy(&d, &root, deploy::Run::Rollback),
             Confirmed::RemoveDeploy(name, idx, root) => self.remove_deploy(&name, idx, &root),
+            Confirmed::Install(then, plans) => self.start_install(then, plans),
         }
     }
 }

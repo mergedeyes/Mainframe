@@ -997,7 +997,7 @@ fn branch_remote(b: &git::Branch) -> (String, Color) {
 }
 
 fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
-    let rect = popup(area, 120, picker.len() as u16 + 14);
+    let rect = popup(area, 120, picker.len() as u16 + 14 + picker.behind.is_some() as u16);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(format!(" install from {} ", pretty_path(&picker.root)).bold()), true).title_bottom(
         Line::from(" Enter install · d desktop entry · r run · u remove shadowing copy · Esc close ")
@@ -1006,8 +1006,21 @@ fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
     );
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let [head, list_area, details] =
-        Layout::vertical([Constraint::Length(1), Constraint::Fill(1), Constraint::Length(8)]).areas(inner);
+    let [warning, head, list_area, details] = Layout::vertical([
+        Constraint::Length(picker.behind.is_some() as u16),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(8),
+    ])
+    .areas(inner);
+    if let Some(behind) = &picker.behind {
+        f.render_widget(
+            Line::from(format!(" ⚠ {behind} — this installs the old version; g p pulls the new commits first"))
+                .fg(Color::Red)
+                .bold(),
+            warning,
+        );
+    }
 
     let row = |name: &str, kind: &str, arch: &str, size: &str, age: &str| {
         format!(
