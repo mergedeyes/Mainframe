@@ -27,7 +27,7 @@ Press `g`, then one key:
 | | `B` | push another local branch, without switching to it |
 | **Branches** | `b` | list branches |
 | | `o` | switch to a branch, numbered in the order to merge them, see below |
-| | `n` | new branch from here |
+| | `n` | new branch from here; the name is tidied up for git and GitHub, see below |
 | | `W` | remove another worktree |
 | | `z` / `Z` | stash / pop the stash |
 | **Releases** | `r` | make a release, see below |
@@ -53,6 +53,14 @@ merged ones. The last column says how each stands with its remote: not
 pushed, pushed, commits to push or pull, only on the remote, or deleted on
 the remote. Type to filter, `Enter` switches. When nothing matches,
 `Enter` switches to the name you typed.
+
+## New branches
+
+`g n` asks for a name and makes it one git and GitHub accept, so you can
+type it the way you'd say it: `feat: Add dark mode (WIP)` becomes
+`feat/add-dark-mode-wip`. Letters are lowercased, spaces and characters
+git refuses turn into `-`, and a `:` or `/` separates folders. While you
+type, the prompt shows `→` with the name the branch will get.
 
 ## Branches deleted on the remote
 

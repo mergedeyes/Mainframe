@@ -9,8 +9,9 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, Level, Mode},
+    app::{App, Level, Mode, PromptKind},
     complete::Completer,
+    git,
     line::LineEdit,
 };
 
@@ -21,7 +22,16 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         Mode::Prompt { kind, input, completer, .. } => {
             let label = format!(" {}: ", kind.label());
             let label_w = label.chars().count() as u16;
-            input_line(f, label, input, "", area);
+            // Show what the typed text becomes when it isn't usable as is.
+            let tail = match kind {
+                PromptKind::NewBranch => match git::branch_name(&input.text) {
+                    name if name == input.text.trim() => String::new(),
+                    name if name.is_empty() => "   → no usable name yet".into(),
+                    name => format!("   → {name}"),
+                },
+                _ => String::new(),
+            };
+            input_line(f, label, input, &tail, area);
             if let Some(c) = completer {
                 draw_completions(f, c, area.x + label_w.saturating_sub(1), area.y, true);
             }
@@ -79,7 +89,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// `label` and the text being typed, the cursor in it, a dim `tail` after it.
-pub(super) fn input_line(f: &mut Frame, label: String, edit: &LineEdit, tail: &'static str, area: Rect) {
+pub(super) fn input_line(f: &mut Frame, label: String, edit: &LineEdit, tail: &str, area: Rect) {
     let x = area.x + label.chars().count() as u16 + edit.col() as u16;
     f.render_widget(
         Line::from(vec![
