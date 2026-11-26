@@ -13,7 +13,7 @@ use super::{App, Confirmed, Level, Mode};
 use crate::{
     config::{self, DesktopMode},
     desktop::{self, DesktopPlan},
-    git,
+    filter_list, git,
     install::{self, Candidate},
     project::{self, Kind, Plan, quote, quote_str},
 };
@@ -119,11 +119,10 @@ impl App {
     pub(super) fn key_install(&mut self, key: KeyEvent) {
         let Mode::Install(picker) = &mut self.mode else { return };
         let len = picker.len();
-        let cur = picker.state.selected().unwrap_or(0);
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char('j') | KeyCode::Down => picker.state.select(Some((cur + 1).min(len.saturating_sub(1)))),
-            KeyCode::Char('k') | KeyCode::Up => picker.state.select(Some(cur.saturating_sub(1))),
+            KeyCode::Char('j') | KeyCode::Down => filter_list::step(&mut picker.state, len, 1),
+            KeyCode::Char('k') | KeyCode::Up => filter_list::step(&mut picker.state, len, -1),
             KeyCode::Enter | KeyCode::Char('i') => {
                 let root = picker.root.clone();
                 let plans = picker.selected_desktop().to_vec();

@@ -17,7 +17,7 @@ use ratatui::{
 use super::{App, Confirmed, Level, Mode};
 use crate::{
     cleanup::{self, Item},
-    config,
+    config, filter_list,
     project::{self, Plan, quote},
 };
 
@@ -110,13 +110,13 @@ impl App {
         let cur = picker.state.selected().unwrap_or(0);
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char('j') | KeyCode::Down => picker.state.select(Some((cur + 1).min(len.saturating_sub(1)))),
-            KeyCode::Char('k') | KeyCode::Up => picker.state.select(Some(cur.saturating_sub(1))),
+            KeyCode::Char('j') | KeyCode::Down => filter_list::step(&mut picker.state, len, 1),
+            KeyCode::Char('k') | KeyCode::Up => filter_list::step(&mut picker.state, len, -1),
             KeyCode::Char(' ') if len > 0 => {
                 if !picker.marked.remove(&cur) {
                     picker.marked.insert(cur);
                 }
-                picker.state.select(Some((cur + 1).min(len - 1)));
+                filter_list::step(&mut picker.state, len, 1);
             }
             // Every row like this one: all debug builds of all projects below, say.
             KeyCode::Char('a') if len > 0 => {

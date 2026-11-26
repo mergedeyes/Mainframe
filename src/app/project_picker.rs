@@ -3,17 +3,13 @@
 
 use std::{fs, path::PathBuf};
 
-use ratatui::{
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    widgets::ListState,
-};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{App, Confirmed, Foreground, Level, Mode};
 use crate::{
     config,
+    filter_list::{self, FilterList, Match},
     form::{Field, Form, FormKind},
-    fuzzy,
-    line::{Edit, LineEdit},
     notes,
     project::quote,
     projects::{self, Entry},
@@ -22,38 +18,14 @@ use crate::{
 
 pub struct ProjectPicker {
     pub root: PathBuf,
-    pub items: Vec<Entry>,
-    /// Open todos per item, same order as `items`.
+    /// Best match first, most recent first while unfiltered.
+    pub list: FilterList<Entry>,
+    /// Open todos per item, same order as `list.items`.
     pub todos: Vec<usize>,
     /// Tasks running per item (its output tabs live on while you're elsewhere).
     pub running: Vec<usize>,
     /// The project you're in, marked in the list.
     pub current: PathBuf,
-    pub filter: LineEdit,
-    /// Indices into `items`, best match first (most recent first while unfiltered).
-    pub visible: Vec<usize>,
-    pub state: ListState,
-}
-
-impl ProjectPicker {
-    fn apply_filter(&mut self) {
-        let q = self.filter.text.replace(' ', "").to_lowercase();
-        let mut scored: Vec<(i64, usize)> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| fuzzy::score(&q, &e.name.to_lowercase()).map(|s| (s, i)))
-            .collect();
-        if !q.is_empty() {
-            scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        }
-        self.visible = scored.into_iter().map(|(_, i)| i).collect();
-        self.state.select((!self.visible.is_empty()).then_some(0));
-    }
-
-    fn selected(&self) -> Option<&Entry> {
-        self.visible.get(self.state.selected()?).map(|&i| &self.items[i])
-    }
 }
 
 impl App {
@@ -70,35 +42,19 @@ impl App {
         let items = projects::scan(&root);
         let todos = items.iter().map(|e| notes::open_count(&e.path)).collect();
         let running = items.iter().map(|e| self.running_in(&e.path)).collect();
-        let mut picker = ProjectPicker {
+        self.mode = Mode::Projects(ProjectPicker {
             root,
-            items,
+            list: FilterList::new(items, |e| e.name.clone(), Match::Fuzzy { limit: usize::MAX }),
             todos,
             running,
             current: self.notes_root.clone(),
-            filter: LineEdit::default(),
-            visible: Vec::new(),
-            state: ListState::default(),
-        };
-        picker.apply_filter();
-        self.mode = Mode::Projects(picker);
+        });
     }
 
     pub(super) fn key_project_picker(&mut self, key: KeyEvent) {
         let Mode::Projects(picker) = &mut self.mode else { return };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let len = picker.visible.len();
-        let cur = picker.state.selected().unwrap_or(0);
-        let next = Some((cur + 1).min(len.saturating_sub(1)));
         match key.code {
-            KeyCode::Esc => self.mode = Mode::Normal,
-            KeyCode::Char('c') if ctrl => self.mode = Mode::Normal,
-            KeyCode::Down | KeyCode::Tab => picker.state.select(next),
-            KeyCode::Char('n') if ctrl => picker.state.select(next),
-            KeyCode::Up | KeyCode::BackTab => picker.state.select(Some(cur.saturating_sub(1))),
-            KeyCode::Char('p') if ctrl => picker.state.select(Some(cur.saturating_sub(1))),
-            KeyCode::PageDown => picker.state.select(Some((cur + 10).min(len.saturating_sub(1)))),
-            KeyCode::PageUp => picker.state.select(Some(cur.saturating_sub(10))),
             KeyCode::Enter => self.pick_project(Pick::Go),
             KeyCode::Char('t') if ctrl => self.pick_project(Pick::Notes),
             KeyCode::Char('o') if ctrl => self.pick_project(Pick::VsCode),
@@ -108,8 +64,8 @@ impl App {
                 self.new_project_form(&root);
             }
             _ => {
-                if picker.filter.key(key) == Edit::Changed {
-                    picker.apply_filter();
+                if picker.list.key(key) == filter_list::Key::Close {
+                    self.mode = Mode::Normal;
                 }
             }
         }
@@ -117,7 +73,7 @@ impl App {
 
     fn pick_project(&mut self, pick: Pick) {
         let Mode::Projects(picker) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
-        let Some(e) = picker.selected().cloned() else { return };
+        let Some(e) = picker.list.selected().cloned() else { return };
         match pick {
             Pick::Go => {
                 self.browser.cd(e.path);

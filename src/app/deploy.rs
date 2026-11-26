@@ -13,7 +13,7 @@ use ratatui::{
 
 use super::{App, Confirmed, Foreground, Level, Mode};
 use crate::{
-    config,
+    config, filter_list,
     form::{Field, Form, FormKind},
     install,
     line::LineEdit,
@@ -95,8 +95,8 @@ impl App {
         let target = picker.selected().cloned();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char('j') | KeyCode::Down => picker.state.select(Some((cur + 1).min(len.saturating_sub(1)))),
-            KeyCode::Char('k') | KeyCode::Up => picker.state.select(Some(cur.saturating_sub(1))),
+            KeyCode::Char('j') | KeyCode::Down => filter_list::step(&mut picker.state, len, 1),
+            KeyCode::Char('k') | KeyCode::Up => filter_list::step(&mut picker.state, len, -1),
             KeyCode::Char('a') if picker.broken => {
                 self.set_status("the settings file doesn't parse — E opens it", Level::Err);
             }

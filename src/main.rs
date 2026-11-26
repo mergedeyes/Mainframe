@@ -5,6 +5,7 @@ mod cleanup;
 mod complete;
 mod config;
 mod desktop;
+mod filter_list;
 mod form;
 mod fuzzy;
 mod git;

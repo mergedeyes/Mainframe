@@ -18,12 +18,15 @@ use crate::{
     form::{Form, FormKind},
     git,
     install::{self, Installed},
+    line::LineEdit,
     notes::Item,
     task::Task,
 };
 
 const ACCENT: Color = Color::Cyan;
 const DIM: Color = Color::DarkGray;
+/// Background of the selected row in lists.
+const SELECTED: Color = Color::Rgb(40, 44, 52);
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -215,11 +218,7 @@ fn draw_browser(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(Paragraph::new(msg.fg(DIM)).block(block), area);
         return;
     }
-    let list = List::new(items)
-        .block(block)
-        .highlight_symbol("▌ ")
-        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
-    f.render_stateful_widget(list, area, &mut app.browser.state);
+    f.render_stateful_widget(list(items).block(block), area, &mut app.browser.state);
 }
 
 fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
@@ -371,7 +370,11 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn spinner(task: &Task) -> &'static str {
-    SPINNER[(task.started.elapsed().as_millis() / 80) as usize % SPINNER.len()]
+    spin_frame(task.started)
+}
+
+fn spin_frame(since: std::time::Instant) -> &'static str {
+    SPINNER[(since.elapsed().as_millis() / 80) as usize % SPINNER.len()]
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -379,12 +382,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         Mode::Prompt { kind, input, completer, .. } => {
             let label = format!(" {}: ", kind.label());
             let label_w = label.chars().count() as u16;
-            let x = area.x + label_w + input.col() as u16;
-            f.render_widget(
-                Line::from(vec![Span::styled(label, Style::new().fg(ACCENT).bold()), Span::raw(input.text.clone())]),
-                area,
-            );
-            f.set_cursor_position(Position::new(x.min(area.right().saturating_sub(1)), area.y));
+            input_line(f, label, input, "", area);
             if let Some(c) = completer {
                 draw_completions(f, c, area.x + label_w.saturating_sub(1), area.y, true);
             }
@@ -397,32 +395,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             );
             return;
         }
-        Mode::Search(edit) => {
-            f.render_widget(
-                Line::from(vec![
-                    Span::styled(" search output: ", Style::new().fg(ACCENT).bold()),
-                    Span::raw(edit.text.clone()),
-                    Span::styled("   Enter keep · Esc clear", Style::new().fg(DIM)),
-                ]),
-                area,
-            );
-            let x = area.x + 16 + edit.col() as u16;
-            f.set_cursor_position(Position::new(x.min(area.right().saturating_sub(1)), area.y));
-            return;
-        }
-        Mode::Filter(edit) => {
-            f.render_widget(
-                Line::from(vec![
-                    Span::styled(" filter: ", Style::new().fg(ACCENT).bold()),
-                    Span::raw(edit.text.clone()),
-                    Span::styled("   Enter keep · Esc clear", Style::new().fg(DIM)),
-                ]),
-                area,
-            );
-            let x = area.x + 9 + edit.col() as u16;
-            f.set_cursor_position(Position::new(x.min(area.right().saturating_sub(1)), area.y));
-            return;
-        }
+        Mode::Search(edit) => return input_line(f, " search output: ".into(), edit, "   Enter keep · Esc clear", area),
+        Mode::Filter(edit) => return input_line(f, " filter: ".into(), edit, "   Enter keep · Esc clear", area),
         _ => {}
     }
 
@@ -465,6 +439,20 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Line::from(spans), area);
 }
 
+/// `label` and the text being typed, the cursor in it, a dim `tail` after it.
+fn input_line(f: &mut Frame, label: String, edit: &LineEdit, tail: &'static str, area: Rect) {
+    let x = area.x + label.chars().count() as u16 + edit.col() as u16;
+    f.render_widget(
+        Line::from(vec![
+            Span::styled(label, Style::new().fg(ACCENT).bold()),
+            Span::raw(edit.text.clone()),
+            Span::styled(tail, Style::new().fg(DIM)),
+        ]),
+        area,
+    );
+    f.set_cursor_position(Position::new(x.min(area.right().saturating_sub(1)), area.y));
+}
+
 /// Suggestion list anchored to an input line: above it (footer prompt) or below it (form field).
 fn draw_completions(f: &mut Frame, c: &Completer, x: u16, anchor_y: u16, above: bool) {
     const ROWS: usize = 10;
@@ -491,7 +479,7 @@ fn draw_completions(f: &mut Frame, c: &Completer, x: u16, anchor_y: u16, above: 
         .map(|(i, item)| {
             let mut style = if item.is_dir { Style::new().fg(Color::Blue).bold() } else { Style::new() };
             if c.selected == Some(first + i) {
-                style = style.bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::REVERSED);
+                style = style.bg(SELECTED).add_modifier(Modifier::REVERSED);
             }
             Line::from(Span::styled(format!(" {} ", truncate(&item.display, w as usize - 4)), style))
         })
@@ -514,6 +502,41 @@ fn popup(area: Rect, w: u16, h: u16) -> Rect {
     let w = w.min(area.width.saturating_sub(2));
     let h = h.min(area.height.saturating_sub(2));
     Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
+}
+
+/// Key hints along the bottom border of a popup.
+fn hints(keys: &str) -> Line<'static> {
+    Line::from(keys.to_string()).right_aligned().fg(DIM)
+}
+
+/// Clears `rect` and draws a popup there, `keys` along its bottom border; returns the inside.
+fn popup_pane(f: &mut Frame, rect: Rect, title: Line<'static>, keys: &str) -> Rect {
+    f.render_widget(Clear, rect);
+    let block = pane(title, true).title_bottom(hints(keys));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    inner
+}
+
+/// The `›` line of a picker that filters as you type, with the cursor in it and, on the
+/// right, how many items match.
+fn filter_line(f: &mut Frame, filter: &LineEdit, count: Option<usize>, area: Rect) {
+    f.render_widget(
+        Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(filter.text.clone())]),
+        area,
+    );
+    if let Some(n) = count {
+        f.render_widget(Line::from(format!("{n} ")).right_aligned().fg(DIM), area);
+    }
+    f.set_cursor_position(Position::new(
+        (area.x + 3 + filter.col() as u16).min(area.right().saturating_sub(1)),
+        area.y,
+    ));
+}
+
+/// A list with the selection look every popup shares.
+fn list(items: Vec<ListItem>) -> List {
+    List::new(items).highlight_symbol("▌ ").highlight_style(Style::new().bg(SELECTED).add_modifier(Modifier::BOLD))
 }
 
 type HelpSection = (&'static str, &'static [(&'static str, &'static str)]);
@@ -612,11 +635,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
     let columns = HELP.map(help_column);
     let h = columns.iter().map(Vec::len).max().unwrap_or(0) as u16 + 2;
     let rect = popup(area, 110, h);
-    f.render_widget(Clear, rect);
-    let block = pane(Line::from(" keys ".bold()), true)
-        .title_bottom(Line::from(" custom keys: , to edit config · any key to close ").right_aligned().fg(DIM));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let inner = popup_pane(f, rect, Line::from(" keys ".bold()), " custom keys: , to edit config · any key to close ");
     let areas = Layout::horizontal([Constraint::Ratio(1, 3); 3]).split(inner);
     for (lines, area) in columns.into_iter().zip(areas.iter()) {
         f.render_widget(Paragraph::new(lines), *area);
@@ -663,10 +682,7 @@ fn draw_git_menu(f: &mut Frame, info: Option<&git::GitInfo>, area: Rect) {
 
     let h = left.len().max(right.len()) as u16 + 4;
     let rect = popup(area, 78, h);
-    f.render_widget(Clear, rect);
-    let block = pane(Line::from(" git ".bold()), true).title_bottom(Line::from(" Esc close ").right_aligned().fg(DIM));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let inner = popup_pane(f, rect, Line::from(" git ".bold()), " Esc close ");
     let [top, _, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
     f.render_widget(status, top);
@@ -677,30 +693,17 @@ fn draw_git_menu(f: &mut Frame, info: Option<&git::GitInfo>, area: Rect) {
 
 fn draw_file_finder(f: &mut Frame, finder: &mut FileFinder, area: Rect) {
     let rect = popup(area, 100, area.height.saturating_sub(4));
-    f.render_widget(Clear, rect);
-    let block = pane(Line::from(format!(" files in {} ", pretty_path(&finder.root)).bold()), true).title_bottom(
-        Line::from(" type to filter · Enter show in list · ^E edit · Esc close ").right_aligned().fg(DIM),
-    );
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let title = Line::from(format!(" files in {} ", pretty_path(&finder.root)).bold());
+    let inner = popup_pane(f, rect, title, " type to filter · Enter show in list · ^E edit · Esc close ");
     let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
-
-    let count = format!("{} ", finder.total);
-    f.render_widget(
-        Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(finder.filter.text.clone())]),
-        input,
-    );
-    f.render_widget(Line::from(count).right_aligned().fg(DIM), input);
-    f.set_cursor_position(Position::new(
-        (input.x + 3 + finder.filter.col() as u16).min(input.right().saturating_sub(1)),
-        input.y,
-    ));
+    filter_line(f, &finder.list.filter, Some(finder.list.total), input);
 
     let items: Vec<ListItem> = finder
+        .list
         .visible
         .iter()
         .map(|&i| {
-            let path = finder.file(i);
+            let path = finder.list.items[i].as_str();
             let (dir, name) = path.rsplit_once('/').map_or(("", path), |(d, n)| (d, n));
             let mut spans = Vec::new();
             if !dir.is_empty() {
@@ -710,42 +713,26 @@ fn draw_file_finder(f: &mut Frame, finder: &mut FileFinder, area: Rect) {
             ListItem::new(Line::from(spans))
         })
         .collect();
-    let list = List::new(items)
-        .highlight_symbol("▌ ")
-        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
-    f.render_stateful_widget(list, list_area, &mut finder.state);
+    f.render_stateful_widget(list(items), list_area, &mut finder.list.state);
 }
 
 fn draw_project_picker(f: &mut Frame, picker: &mut ProjectPicker, area: Rect) {
-    let rect = popup(area, 90, picker.items.len() as u16 + 4);
-    f.render_widget(Clear, rect);
-    let block = pane(Line::from(format!(" projects in {} ", pretty_path(&picker.root)).bold()), true).title_bottom(
-        Line::from(" type to filter · Enter go · ^T notes · ^O VS Code · ^G new · ^L CLAUDE.md · Esc close ")
-            .right_aligned()
-            .fg(DIM),
-    );
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let rect = popup(area, 90, picker.list.items.len() as u16 + 4);
+    let title = Line::from(format!(" projects in {} ", pretty_path(&picker.root)).bold());
+    let keys = " type to filter · Enter go · ^T notes · ^O VS Code · ^G new · ^L CLAUDE.md · Esc close ";
+    let inner = popup_pane(f, rect, title, keys);
     let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
-
-    f.render_widget(
-        Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(picker.filter.text.clone())]),
-        input,
-    );
-    f.render_widget(Line::from(format!("{} ", picker.visible.len())).right_aligned().fg(DIM), input);
-    f.set_cursor_position(Position::new(
-        (input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)),
-        input.y,
-    ));
+    filter_line(f, &picker.list.filter, Some(picker.list.visible.len()), input);
 
     // name · kind · todos · age, the name taking what's left.
     let w = list_area.width.saturating_sub(2) as usize;
     let name_w = w.saturating_sub(2 + 7 + 5 + 6 + 9);
     let items: Vec<ListItem> = picker
+        .list
         .visible
         .iter()
         .map(|&i| {
-            let e = &picker.items[i];
+            let e = &picker.list.items[i];
             let here = e.path == picker.current;
             let (group, name) = e.name.rsplit_once('/').map_or(("", e.name.as_str()), |(g, n)| (g, n));
             let shown = truncate(&e.name, name_w);
@@ -775,10 +762,8 @@ fn draw_project_picker(f: &mut Frame, picker: &mut ProjectPicker, area: Rect) {
             ListItem::new(Line::from(spans))
         })
         .collect();
-    let list = List::new(items)
-        .highlight_symbol("▌")
-        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
-    f.render_stateful_widget(list, list_area, &mut picker.state);
+    // One column for the marker: the name gets every column it can.
+    f.render_stateful_widget(list(items).highlight_symbol("▌"), list_area, &mut picker.list.state);
 }
 
 fn draw_notes(f: &mut Frame, view: &mut NotesView, area: Rect) {
@@ -795,9 +780,8 @@ fn draw_notes(f: &mut Frame, view: &mut NotesView, area: Rect) {
         " a todo  n note  ⏎ edit  ␣ check  t ⇄note  d del  u undo  J K move  C clear checked  E editor "
     };
     let close = if view.editing.is_some() { "" } else { " Esc close " };
-    let block = pane(Line::from(title), true)
-        .title(Line::from(close).right_aligned().fg(DIM))
-        .title_bottom(Line::from(keys).right_aligned().fg(DIM));
+    let block =
+        pane(Line::from(title), true).title(Line::from(close).right_aligned().fg(DIM)).title_bottom(hints(keys));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
@@ -851,7 +835,8 @@ fn draw_notes(f: &mut Frame, view: &mut NotesView, area: Rect) {
             ListItem::new(Line::from(vec![Span::styled(lead, lead_style), text]))
         })
         .collect();
-    let list = List::new(items).highlight_symbol("▌ ").highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)));
+    // Not bold: crossed-out done todos stay readable when selected.
+    let list = list(items).highlight_style(Style::new().bg(SELECTED));
     f.render_stateful_widget(list, inner, &mut view.state);
 
     // The cursor sits in the line being edited.
@@ -867,29 +852,19 @@ fn draw_notes(f: &mut Frame, view: &mut NotesView, area: Rect) {
 }
 
 fn draw_task_picker(f: &mut Frame, picker: &mut TaskPicker, area: Rect) {
-    let rect = popup(area, 100, picker.items.len() as u16 + 4);
-    f.render_widget(Clear, rect);
-    let block = pane(Line::from(format!(" tasks · {} ", picker.title).bold()), true)
-        .title_bottom(Line::from(" type to filter · Enter run · ^R in terminal · Esc close ").right_aligned().fg(DIM));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let rect = popup(area, 100, picker.list.items.len() as u16 + 4);
+    let title = Line::from(format!(" tasks · {} ", picker.title).bold());
+    let inner = popup_pane(f, rect, title, " type to filter · Enter run · ^R in terminal · Esc close ");
     let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+    filter_line(f, &picker.list.filter, None, input);
 
-    f.render_widget(
-        Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(picker.filter.text.clone())]),
-        input,
-    );
-    f.set_cursor_position(Position::new(
-        (input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)),
-        input.y,
-    ));
-
-    let name_w = picker.items.iter().map(|t| t.name.chars().count()).max().unwrap_or(0).min(28);
+    let name_w = picker.list.items.iter().map(|t| t.name.chars().count()).max().unwrap_or(0).min(28);
     let items: Vec<ListItem> = picker
+        .list
         .visible
         .iter()
         .map(|&i| {
-            let t = &picker.items[i];
+            let t = &picker.list.items[i];
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{:<8}", t.group), Style::new().fg(Color::Yellow)),
                 Span::styled(format!("{:<name_w$}  ", truncate(&t.name, name_w)), Style::new().bold()),
@@ -897,36 +872,21 @@ fn draw_task_picker(f: &mut Frame, picker: &mut TaskPicker, area: Rect) {
             ]))
         })
         .collect();
-    let list = List::new(items)
-        .highlight_symbol("▌ ")
-        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
-    f.render_stateful_widget(list, list_area, &mut picker.state);
+    f.render_stateful_widget(list(items), list_area, &mut picker.list.state);
 }
 
 fn draw_branch_picker(f: &mut Frame, picker: &mut BranchPicker, area: Rect) {
-    let rect = popup(area, 130, picker.items.len() as u16 + 5);
-    f.render_widget(Clear, rect);
+    let rect = popup(area, 130, picker.list.items.len() as u16 + 5);
     let title = match &picker.base {
         Some(base) => format!(" switch branch · numbered in merge order, against {base} "),
         None => " switch branch ".to_string(),
     };
-    let block = pane(Line::from(title.bold()), true)
-        .title_bottom(Line::from(" type to filter · Enter switch · Esc close ").right_aligned().fg(DIM));
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let inner = popup_pane(f, rect, Line::from(title.bold()), " type to filter · Enter switch · Esc close ");
     let [input, head, list_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+    filter_line(f, &picker.list.filter, None, input);
 
-    f.render_widget(
-        Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(picker.filter.text.clone())]),
-        input,
-    );
-    f.set_cursor_position(Position::new(
-        (input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)),
-        input.y,
-    ));
-
-    let name_w = picker.items.iter().map(|b| b.name.chars().count()).max().unwrap_or(0).clamp(6, 36);
+    let name_w = picker.list.items.iter().map(|b| b.name.chars().count()).max().unwrap_or(0).clamp(6, 36);
     let in_base = format!("in {}", picker.base.as_deref().unwrap_or("base"));
     let commits_w = in_base.chars().count().max(7);
     // The highlight symbol takes two columns in front of every row.
@@ -940,10 +900,11 @@ fn draw_branch_picker(f: &mut Frame, picker: &mut BranchPicker, area: Rect) {
     );
 
     let items: Vec<ListItem> = picker
+        .list
         .visible
         .iter()
         .map(|&i| {
-            let b = &picker.items[i];
+            let b = &picker.list.items[i];
             let number = b.number.map_or_else(|| "   ".to_string(), |n| format!("{n:>3}"));
             let mark = if b.current { "● " } else { "  " };
             let name_style = if b.current { Style::new().fg(ACCENT).bold() } else { Style::new().bold() };
@@ -970,10 +931,7 @@ fn draw_branch_picker(f: &mut Frame, picker: &mut BranchPicker, area: Rect) {
             ]))
         })
         .collect();
-    let list = List::new(items)
-        .highlight_symbol("▌ ")
-        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
-    f.render_stateful_widget(list, list_area, &mut picker.state);
+    f.render_stateful_widget(list(items), list_area, &mut picker.list.state);
 }
 
 /// How a branch stands with its remote, for the last column of the `g o` picker.
@@ -1007,16 +965,9 @@ fn pulls(before: &Option<String>) -> &'static str {
 
 fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
     let rect = popup(area, 120, picker.len() as u16 + 14 + picker.behind.is_some() as u16);
-    f.render_widget(Clear, rect);
-    let block = pane(Line::from(format!(" install from {} ", pretty_path(&picker.root)).bold()), true).title_bottom(
-        Line::from(
-            " Enter install · p pull, then install · d desktop entry · r run · u remove shadowing copy · Esc close ",
-        )
-        .right_aligned()
-        .fg(DIM),
-    );
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let title = Line::from(format!(" install from {} ", pretty_path(&picker.root)).bold());
+    let keys = " Enter install · p pull, then install · d desktop entry · r run · u remove shadowing copy · Esc close ";
+    let inner = popup_pane(f, rect, title, keys);
     let [warning, head, list_area, details] = Layout::vertical([
         Constraint::Length(picker.behind.is_some() as u16),
         Constraint::Length(1),
@@ -1078,10 +1029,7 @@ fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
         }
         items.push(ListItem::new(Line::from(spans)));
     }
-    let list = List::new(items)
-        .highlight_symbol("▌ ")
-        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
-    f.render_stateful_widget(list, list_area, &mut picker.state);
+    f.render_stateful_widget(list(items), list_area, &mut picker.state);
 
     let label = |s: &'static str| Span::styled(format!("{s:<10}"), Style::new().fg(DIM));
     let mut lines = match picker.selected() {
@@ -1182,14 +1130,9 @@ fn draw_deploy(f: &mut Frame, picker: &mut DeployPicker, area: Rect) {
     }
 
     let rect = popup(area, 110, picker.targets.len() as u16 + details.len() as u16 + 4);
-    f.render_widget(Clear, rect);
-    let block = pane(Line::from(format!(" deploy {} ", picker.title).bold()), true).title_bottom(
-        Line::from(" Enter deploy · u roll back · l backups · a add · e edit · x delete · E file · Esc close ")
-            .right_aligned()
-            .fg(DIM),
-    );
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let title = Line::from(format!(" deploy {} ", picker.title).bold());
+    let keys = " Enter deploy · u roll back · l backups · a add · e edit · x delete · E file · Esc close ";
+    let inner = popup_pane(f, rect, title, keys);
     let [list_area, _, details_area] =
         Layout::vertical([Constraint::Length(picker.targets.len() as u16), Constraint::Length(1), Constraint::Fill(1)])
             .areas(inner);
@@ -1209,10 +1152,7 @@ fn draw_deploy(f: &mut Frame, picker: &mut DeployPicker, area: Rect) {
             ListItem::new(Line::from(spans))
         })
         .collect();
-    let list = List::new(items)
-        .highlight_symbol("▌ ")
-        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
-    f.render_stateful_widget(list, list_area, &mut picker.state);
+    f.render_stateful_widget(list(items), list_area, &mut picker.state);
     f.render_widget(Paragraph::new(details), details_area);
 }
 
@@ -1220,11 +1160,8 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
     let title = Line::from(format!(" clean up {} ", picker.title).bold());
     if picker.measuring() {
         let rect = popup(area, 60, 3);
-        f.render_widget(Clear, rect);
-        let spin = SPINNER[(picker.started.elapsed().as_millis() / 80) as usize % SPINNER.len()];
-        let block = pane(title, true).title_bottom(Line::from(" Esc close ").right_aligned().fg(DIM));
-        let inner = block.inner(rect);
-        f.render_widget(block, rect);
+        let spin = spin_frame(picker.started);
+        let inner = popup_pane(f, rect, title, " Esc close ");
         f.render_widget(
             Line::from(vec![Span::styled(format!(" {spin} "), Style::new().fg(ACCENT)), "measuring…".fg(DIM)]),
             inner,
@@ -1262,12 +1199,7 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
     let items = picker.items();
     let rows = items.len() as u16;
     let rect = popup(area, 100, rows + details.len() as u16 + 4);
-    f.render_widget(Clear, rect);
-    let block = pane(title, true).title_bottom(
-        Line::from(" Space mark · a mark all like this · Enter clean · Esc close ").right_aligned().fg(DIM),
-    );
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let inner = popup_pane(f, rect, title, " Space mark · a mark all like this · Enter clean · Esc close ");
     let [list_area, _, details_area] =
         Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
 
@@ -1289,10 +1221,7 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
             ]))
         })
         .collect();
-    let list = List::new(rows)
-        .highlight_symbol("▌ ")
-        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
-    f.render_stateful_widget(list, list_area, &mut picker.state);
+    f.render_stateful_widget(list(rows), list_area, &mut picker.state);
     f.render_widget(Paragraph::new(details), details_area);
 }
 
@@ -1343,13 +1272,9 @@ fn draw_desktop_review(f: &mut Frame, review: &DesktopReview, area: Rect) {
 
     let h = (head.len() + body.len()) as u16 + 5;
     let rect = popup(area, 110, h);
-    f.render_widget(Clear, rect);
     let title = format!(" update desktop entry {}/{} ", review.idx + 1, review.plans.len());
-    let block = pane(Line::from(title.bold()), true).title_bottom(
-        Line::from(" y/Enter update · n skip entry · Esc cancel all · j/k scroll ").right_aligned().fg(DIM),
-    );
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let inner =
+        popup_pane(f, rect, Line::from(title.bold()), " y/Enter update · n skip entry · Esc cancel all · j/k scroll ");
     let [head_area, _, body_area] =
         Layout::vertical([Constraint::Length(head.len() as u16), Constraint::Length(1), Constraint::Fill(1)])
             .areas(inner);
