@@ -109,7 +109,7 @@ impl App {
             'a' => format!("{GIT} add -- {many} && {GIT} status --short"),
             'A' => format!("{GIT} add -A && {GIT} status --short"),
             'u' => format!("{GIT} restore --staged -- {many} && {GIT} status --short"),
-            'f' => format!("{GIT} fetch --all --prune"),
+            'f' => git::fetch_cmd(self.config.prune_gone_branches, git::base_branch(&cwd).as_deref()),
             'p' => format!("{GIT} pull"),
             'P' if self.git.as_ref().is_some_and(|g| !g.upstream) => format!("{GIT} push -u origin HEAD"),
             'P' => format!("{GIT} push"),
@@ -119,7 +119,7 @@ impl App {
             'i' => format!("{GIT} init"),
             'c' => return self.prompt(PromptKind::Commit { all: false }, ""),
             'C' => return self.prompt(PromptKind::Commit { all: true }, ""),
-            'o' => return self.prompt(PromptKind::SwitchBranch, ""),
+            'o' => return self.open_branch_picker(),
             'n' => return self.prompt(PromptKind::NewBranch, ""),
             'B' => return self.prompt(PromptKind::PushBranch, ""),
             'W' => {

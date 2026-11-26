@@ -27,6 +27,7 @@ explained.
 | `zoxide` | `true` | use [zoxide](https://github.com/ajeetdsouza/zoxide) when it's installed: keywords in `c`, the `Z` picker, and folders you visit are added to its list |
 | `desktop_entries` | `"ask"` | when `i` installs a program with a `.desktop` entry: `"ask"` shows the change first, `"always"` updates it, `"never"` leaves it alone |
 | `notify_after` | `10` | ring the bell and send a desktop notification when a task that ran this many seconds finishes; `0` turns it off |
+| `prune_gone_branches` | `false` | `g f` also deletes local branches whose remote branch was deleted, when they're merged into `origin/main`; see [Branches deleted on the remote](../guides/git.md#branches-deleted-on-the-remote) |
 | `keep_deploy_builds` | `false` | keep the build checkout of deploys with `from` for faster rebuilds; see [Deploying a branch](../guides/install-and-deploy.md#deploying-a-branch-not-your-work-in-progress) |
 
 ### Runners

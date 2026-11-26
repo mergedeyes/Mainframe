@@ -224,27 +224,167 @@ pub fn push_branch_cmd(cwd: &Path, branch: &str) -> Result<String, String> {
     })
 }
 
-pub fn branches(cwd: &Path) -> Vec<String> {
-    let Some(raw) = git(cwd, &["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"]) else {
-        return Vec::new();
+/// How a local branch stands with the remote branch it tracks.
+#[derive(Debug, PartialEq)]
+pub enum Upstream {
+    /// It tracks nothing: never pushed.
+    None,
+    /// It tracked a remote branch that has been deleted since, usually after its pull request was merged.
+    Gone,
+    Track {
+        ahead: u32,
+        behind: u32,
+    },
+}
+
+/// A branch in the `g o` picker.
+pub struct Branch {
+    pub name: String,
+    /// Only on a remote: switching to it makes a local branch that tracks it.
+    pub remote_only: bool,
+    pub current: bool,
+    /// The branch the others are measured against (`origin/main`, or `main` without a remote).
+    pub base: bool,
+    /// Commits it has that the base doesn't.
+    pub ahead: usize,
+    /// When the work on it started: the author date of the oldest of those commits.
+    pub started: Option<(i64, String)>,
+    /// Its newest commit.
+    pub last: (i64, String),
+    pub upstream: Upstream,
+    /// The order to merge in: 1 for the branch whose work started first. Only for
+    /// branches with commits the base doesn't have.
+    pub number: Option<usize>,
+}
+
+const DATE: &str = "format-local:%Y-%m-%d %H:%M";
+
+/// What branches are measured against: the remote's default branch, else a local main or master.
+pub fn base_branch(cwd: &Path) -> Option<String> {
+    let exists = |r: &str| git(cwd, &["rev-parse", "--verify", "--quiet", r]).is_some();
+    git(cwd, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .map(|o| String::from_utf8_lossy(&o).trim().to_string())
+        .filter(|b| !b.is_empty())
+        .or_else(|| {
+            ["origin/main", "origin/master", "main", "master"].into_iter().find(|b| exists(b)).map(String::from)
+        })
+}
+
+/// Every branch, local and on remotes, in merge order: the numbered ones (work that isn't
+/// in the base yet, oldest first), then the base, then the rest, newest first.
+pub fn branch_list(cwd: &Path) -> (Option<String>, Vec<Branch>) {
+    let base = base_branch(cwd);
+    let format = format!(
+        "--format=%(refname)%09%(HEAD)%09%(committerdate:unix)%09%(committerdate:{DATE})%09%(upstream)%09%(upstream:track,nobracket)"
+    );
+    let Some(raw) = git(cwd, &["for-each-ref", &format, "refs/heads", "refs/remotes"]) else {
+        return (base, Vec::new());
     };
-    let mut out: Vec<String> = Vec::new();
-    for r in String::from_utf8_lossy(&raw).lines() {
-        let name = if let Some(b) = r.strip_prefix("refs/heads/") {
-            b
-        } else if let Some(rest) = r.strip_prefix("refs/remotes/") {
+    let raw = String::from_utf8_lossy(&raw);
+    // The base's own name without the remote: a local `main` is the base, too.
+    let base_name = base.as_deref().map(|b| b.split_once('/').map_or(b, |(_, n)| n).to_string());
+    let mut out: Vec<Branch> = Vec::new();
+    for line in raw.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        let [refname, head, unix, date, upstream, track] = f[..] else { continue };
+        let (name, remote_only) = if let Some(b) = refname.strip_prefix("refs/heads/") {
+            (b.to_string(), false)
+        } else if let Some(rest) = refname.strip_prefix("refs/remotes/") {
             match rest.split_once('/') {
                 Some((_, "HEAD")) | None => continue,
-                Some((_, b)) => b,
+                Some((_, b)) => (b.to_string(), true),
             }
         } else {
             continue;
         };
-        if !out.iter().any(|o| o == name) {
-            out.push(name.to_string());
+        // A remote branch that's also local shows up once, as the local one (local refs come first).
+        if remote_only && out.iter().any(|o| o.name == name) {
+            continue;
         }
+        let is_base = base_name.as_deref() == Some(name.as_str());
+        let (ahead, started) = match base.as_deref().filter(|_| !is_base) {
+            Some(b) => {
+                let short = refname.trim_start_matches("refs/heads/").trim_start_matches("refs/remotes/");
+                own_commits(cwd, b, short)
+            }
+            None => (0, None),
+        };
+        let upstream = match (upstream, track) {
+            ("", _) => Upstream::None,
+            (_, "gone") => Upstream::Gone,
+            (_, t) => Upstream::Track { ahead: count(t, "ahead"), behind: count(t, "behind") },
+        };
+        out.push(Branch {
+            name,
+            remote_only,
+            current: head == "*",
+            base: is_base,
+            ahead,
+            started,
+            last: (unix.parse().unwrap_or(0), date.to_string()),
+            upstream,
+            number: None,
+        });
     }
-    out
+    order(&mut out);
+    (base, out)
+}
+
+/// Sorts into merge order and numbers the branches that have work to merge.
+fn order(list: &mut [Branch]) {
+    let rank = |b: &Branch| {
+        if b.base {
+            1
+        } else if b.ahead > 0 {
+            0
+        } else {
+            2
+        }
+    };
+    list.sort_by(|a, b| {
+        let started = |x: &Branch| x.started.as_ref().map_or(i64::MAX, |s| s.0);
+        rank(a).cmp(&rank(b)).then_with(|| match rank(a) {
+            // A branch stacked on another started with the same commit: the one below goes first.
+            0 => started(a).cmp(&started(b)).then(a.ahead.cmp(&b.ahead)).then_with(|| a.last.0.cmp(&b.last.0)),
+            _ => b.last.0.cmp(&a.last.0),
+        })
+    });
+    for (i, b) in list.iter_mut().filter(|b| rank(b) == 0).enumerate() {
+        b.number = Some(i + 1);
+    }
+}
+
+/// How many commits `branch` has that `base` doesn't, and the author date of the oldest.
+fn own_commits(cwd: &Path, base: &str, branch: &str) -> (usize, Option<(i64, String)>) {
+    let range = format!("{base}..{branch}");
+    let date = format!("--date={DATE}");
+    let Some(raw) = git(cwd, &["log", "--format=%at%x09%ad", &date, &range, "--"]) else { return (0, None) };
+    let raw = String::from_utf8_lossy(&raw);
+    let lines: Vec<&str> = raw.lines().collect();
+    let oldest = lines.last().and_then(|l| l.split_once('\t')).map(|(t, d)| (t.parse().unwrap_or(0), d.to_string()));
+    (lines.len(), oldest)
+}
+
+/// "ahead 2, behind 1" → 2 for "ahead".
+fn count(track: &str, what: &str) -> u32 {
+    track.split(", ").find_map(|part| part.strip_prefix(what).map(|n| n.trim().parse().unwrap_or(0))).unwrap_or(0)
+}
+
+/// `g f`: fetch from every remote and drop remote branches that are gone. With `prune_local`,
+/// also delete local branches whose remote branch is gone, but only those whose work is in
+/// `base`, so nothing that isn't merged is lost; the others are listed and kept.
+pub fn fetch_cmd(prune_local: bool, base: Option<&str>) -> String {
+    let fetch = format!("{GIT} fetch --all --prune");
+    if !prune_local {
+        return fetch;
+    }
+    format!(
+        "{fetch} && base={} && git for-each-ref --format='%(if:equals=gone)%(upstream:track,nobracket)%(then)%(refname:short)%(end)' refs/heads \
+         | while read -r b; do [ -n \"$b\" ] || continue; \
+         if git merge-base --is-ancestor \"$b\" \"$base\"; then git branch -D \"$b\"; \
+         else echo \"kept $b: its remote branch is gone, but it isn't merged into $base\"; fi; done",
+        quote_str(base.unwrap_or("HEAD"))
+    )
 }
 
 /// `git` with colors forced on, since the output pane isn't a tty.
@@ -290,7 +430,7 @@ pub const MENU: &[(&str, &[MenuItem])] = &[
         "branches",
         &[
             item('b', "list branches"),
-            item('o', "switch to branch…"),
+            item('o', "switch branch, merge order…"),
             item('n', "new branch…"),
             item('W', "remove a worktree…"),
             item('z', "stash"),
@@ -474,5 +614,123 @@ mod worktree_tests {
         assert_eq!(by("locks").branch.as_deref(), Some("edit-locks"));
         assert!(!by("locks").gone && by("gone").gone);
         assert_eq!(dirty, 1);
+    }
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+
+    fn run(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    fn commit(dir: &Path, msg: &str, date: &str) {
+        run(dir, &["commit", "-q", "--allow-empty", "-m", msg, "--date", date]);
+    }
+
+    /// A repo with a bare remote: main pushed, and its HEAD set like a clone would have it.
+    fn setup(name: &str) -> (PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("mainframe-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        run(&base, &["init", "-q", "--bare", "-b", "main", "remote.git"]);
+        run(&repo, &["init", "-q", "-b", "main"]);
+        run(&repo, &["remote", "add", "origin", base.join("remote.git").to_str().unwrap()]);
+        commit(&repo, "one", "2026-01-01T10:00:00");
+        run(&repo, &["push", "-q", "-u", "origin", "main"]);
+        run(&repo, &["remote", "set-head", "origin", "main"]);
+        (base, repo)
+    }
+
+    /// Numbered by when their work started, not by when they last changed; branches with
+    /// nothing new and the base come after, unnumbered.
+    #[test]
+    fn numbers_branches_in_merge_order() {
+        let (base, repo) = setup("branches");
+        run(&repo, &["switch", "-q", "-c", "old-work"]);
+        commit(&repo, "a", "2026-02-01T10:00:00");
+        run(&repo, &["switch", "-q", "-c", "new-work", "main"]);
+        commit(&repo, "b", "2026-03-01T10:00:00");
+        commit(&repo, "c", "2026-03-02T10:00:00");
+        // old-work changes last, but its work started first.
+        run(&repo, &["switch", "-q", "old-work"]);
+        commit(&repo, "d", "2026-04-01T10:00:00");
+        run(&repo, &["switch", "-q", "-c", "nothing-new", "main"]);
+        // Only on the remote: pushed from elsewhere, say.
+        run(&repo, &["push", "-q", "origin", "new-work:remote-work"]);
+        run(&repo, &["fetch", "-q"]);
+        run(&repo, &["switch", "-q", "old-work"]);
+
+        let (b, list) = branch_list(&repo);
+        std::fs::remove_dir_all(&base).unwrap();
+
+        assert_eq!(b.as_deref(), Some("origin/main"));
+        let rows: Vec<(&str, Option<usize>, usize)> =
+            list.iter().map(|b| (b.name.as_str(), b.number, b.ahead)).collect();
+        assert_eq!(
+            rows,
+            [
+                ("old-work", Some(1), 2),
+                ("new-work", Some(2), 2),
+                ("remote-work", Some(3), 2),
+                ("main", None, 0),
+                ("nothing-new", None, 0),
+            ]
+        );
+        let by = |n: &str| list.iter().find(|b| b.name == n).unwrap();
+        assert!(by("old-work").current && by("main").base && by("remote-work").remote_only);
+        assert_eq!(by("old-work").started.as_ref().unwrap().1, "2026-02-01 10:00");
+        assert_eq!(by("main").upstream, Upstream::Track { ahead: 0, behind: 0 });
+        assert_eq!(by("new-work").upstream, Upstream::None);
+    }
+
+    /// With pruning on, a merged branch whose remote branch is gone is deleted; one that
+    /// isn't merged is kept, and so is everything with pruning off.
+    #[test]
+    fn prunes_only_merged_branches_whose_remote_is_gone() {
+        let (base, repo) = setup("prune");
+        for b in ["merged", "unmerged"] {
+            run(&repo, &["switch", "-q", "-c", b, "main"]);
+            commit(&repo, b, "2026-02-01T10:00:00");
+            run(&repo, &["push", "-q", "-u", "origin", b]);
+        }
+        // The pull request for "merged" was merged on the remote, then both branches deleted there.
+        run(&repo, &["switch", "-q", "main"]);
+        run(&repo, &["merge", "-q", "--no-ff", "-m", "merge", "merged"]);
+        run(&repo, &["push", "-q", "origin", "main", ":merged", ":unmerged"]);
+        run(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+        let sh = |cmd: String| {
+            let out = Command::new("sh").arg("-c").arg(&cmd).env("LC_ALL", "C").current_dir(&repo).output().unwrap();
+            assert!(out.status.success(), "{cmd}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+
+        sh(fetch_cmd(false, Some("origin/main")).replace(GIT, "git"));
+        let after_plain = local_branches(&repo);
+        let out = sh(fetch_cmd(true, Some("origin/main")).replace(GIT, "git"));
+        let after_prune = local_branches(&repo);
+        std::fs::remove_dir_all(&base).unwrap();
+
+        assert_eq!(after_plain.len(), 3);
+        let mut left = after_prune.clone();
+        left.sort();
+        assert_eq!(left, ["main", "unmerged"]);
+        assert!(out.contains("Deleted branch merged"), "{out}");
+        assert!(out.contains("kept unmerged"), "{out}");
+    }
+
+    #[test]
+    fn reads_ahead_and_behind() {
+        assert_eq!(count("ahead 2, behind 1", "ahead"), 2);
+        assert_eq!(count("ahead 2, behind 1", "behind"), 1);
+        assert_eq!(count("behind 3", "ahead"), 0);
     }
 }

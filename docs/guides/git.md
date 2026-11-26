@@ -21,12 +21,12 @@ Press `g`, then one key:
 | | `C` | stage everything and commit |
 | | `e` | amend the last commit in your editor |
 | | `x` | throw away the changes to the selected files, after asking |
-| **Sync** | `f` | fetch from all remotes |
+| **Sync** | `f` | fetch from all remotes; can also delete merged branches, see below |
 | | `p` | pull |
 | | `P` | push; the first push of a branch sets its upstream |
 | | `B` | push another local branch, without switching to it |
 | **Branches** | `b` | list branches |
-| | `o` | switch to a branch (Tab completes) |
+| | `o` | switch to a branch, numbered in the order to merge them, see below |
 | | `n` | new branch from here |
 | | `W` | remove another worktree |
 | | `z` / `Z` | stash / pop the stash |
@@ -37,6 +37,38 @@ Press `g`, then one key:
 | | `g` | open lazygit, gitui or tig, whichever is installed |
 
 Outside the git menu, `s` and `u` stage and unstage right in the file list.
+
+## Switching branches, in merge order
+
+`g o` lists every branch, local and on the remote, with two dates: when
+the work on it started (its oldest commit that isn't in `origin/main` yet)
+and its last commit. Branches with work still to merge are numbered 1, 2,
+3 … by when their work started, so merging or opening pull requests in
+that order brings them in the way they were written. A branch stacked on
+another comes right after it.
+
+Below the numbered ones come the base (`origin/main`, or `main` in a repo
+without a remote) and the branches that have nothing it doesn't, such as
+merged ones. The last column says how each stands with its remote: not
+pushed, pushed, commits to push or pull, only on the remote, or deleted on
+the remote. Type to filter, `Enter` switches. When nothing matches,
+`Enter` switches to the name you typed.
+
+## Branches deleted on the remote
+
+When a pull request is merged, GitHub usually deletes its branch. `g f`
+then drops `origin/<branch>` on the next fetch, but your local branch
+stays; `g o` shows it as deleted on the remote. To have `g f` delete those
+too, set this in the [configuration](../reference/config.md):
+
+```toml
+prune_gone_branches = true
+```
+
+It only deletes a local branch when everything on it is in `origin/main`,
+so no work is lost. One that isn't merged, for example after a squash
+merge or when its pull request was closed, stays, and the output says so.
+The branch you have checked out stays too.
 
 ## Pushing another branch
 

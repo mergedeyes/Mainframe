@@ -1,6 +1,7 @@
 //! App state and the key dispatch for the normal mode; each other mode lives in its own file.
 
 mod actions;
+mod branch_picker;
 mod cleanup;
 mod deploy;
 mod file_finder;
@@ -24,6 +25,7 @@ use std::{
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+pub use branch_picker::BranchPicker;
 pub use cleanup::CleanupPicker;
 pub use deploy::{DeployPicker, deploy_from_form};
 pub use file_finder::FileFinder;
@@ -72,6 +74,7 @@ pub enum Mode {
     GitMenu,
     Install(InstallPicker),
     Tasks(TaskPicker),
+    Branches(BranchPicker),
     Files(FileFinder),
     Projects(ProjectPicker),
     Notes(NotesView),
@@ -89,7 +92,6 @@ pub enum PromptKind {
     Rename(PathBuf),
     Cd,
     Commit { all: bool },
-    SwitchBranch,
     NewBranch,
     PushBranch,
     RemoveWorktree,
@@ -106,7 +108,6 @@ impl PromptKind {
             PromptKind::Cd => "go to (path or zoxide keywords)",
             PromptKind::Commit { all: false } => "commit message",
             PromptKind::Commit { all: true } => "commit all, message",
-            PromptKind::SwitchBranch => "switch to branch",
             PromptKind::NewBranch => "new branch",
             PromptKind::PushBranch => "push branch",
             PromptKind::RemoveWorktree => "remove worktree",
@@ -441,6 +442,7 @@ impl App {
             Mode::GitMenu => self.key_git(key),
             Mode::Install(_) => self.key_install(key),
             Mode::Tasks(_) => self.key_task_picker(key),
+            Mode::Branches(_) => self.key_branch_picker(key),
             Mode::Files(_) => self.key_file_finder(key),
             Mode::Projects(_) => self.key_project_picker(key),
             Mode::Notes(_) => self.key_notes(key),

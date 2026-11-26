@@ -48,6 +48,11 @@ notify_after = 10
 # once the deploy is done; true keeps it, so the next deploy only rebuilds what changed.
 keep_deploy_builds = false
 
+# `g f` fetches and drops remote branches that were deleted (after a merged pull
+# request, say). true also deletes the local branches that tracked them, but only
+# those whose work is in the default branch (origin/main); the others are kept.
+prune_gone_branches = false
+
 # Override or add run commands per file extension (used by `r` / `R`).
 [runners]
 # py = "python3 {file}"
@@ -93,6 +98,7 @@ pub struct Config {
     pub desktop_entries: DesktopMode,
     pub notify_after: u64,
     pub keep_deploy_builds: bool,
+    pub prune_gone_branches: bool,
     pub runners: HashMap<String, String>,
     pub actions: Vec<Action>,
 }
@@ -110,6 +116,7 @@ impl Default for Config {
             desktop_entries: DesktopMode::Ask,
             notify_after: 10,
             keep_deploy_builds: false,
+            prune_gone_branches: false,
             runners: HashMap::new(),
             actions: Vec::new(),
         }

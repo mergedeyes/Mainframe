@@ -8,8 +8,8 @@ use ratatui::{
 
 use crate::{
     app::{
-        AfterReview, App, CleanupPicker, DeployPicker, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode,
-        NotesView, ProjectPicker, TaskPicker,
+        AfterReview, App, BranchPicker, CleanupPicker, DeployPicker, DesktopReview, FileFinder, Focus, InstallPicker,
+        Level, Mode, NotesView, ProjectPicker, TaskPicker,
     },
     browser::{Preview, Sort, human_size},
     complete::Completer,
@@ -64,6 +64,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::GitMenu => draw_git_menu(f, app.git.as_ref(), f.area()),
         Mode::Install(picker) => draw_install(f, picker, f.area()),
         Mode::Tasks(picker) => draw_task_picker(f, picker, f.area()),
+        Mode::Branches(picker) => draw_branch_picker(f, picker, f.area()),
         Mode::Files(finder) => draw_file_finder(f, finder, f.area()),
         Mode::Projects(picker) => draw_project_picker(f, picker, f.area()),
         Mode::Notes(view) => draw_notes(f, view, f.area()),
@@ -899,6 +900,99 @@ fn draw_task_picker(f: &mut Frame, picker: &mut TaskPicker, area: Rect) {
         .highlight_symbol("▌ ")
         .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
     f.render_stateful_widget(list, list_area, &mut picker.state);
+}
+
+fn draw_branch_picker(f: &mut Frame, picker: &mut BranchPicker, area: Rect) {
+    let rect = popup(area, 130, picker.items.len() as u16 + 5);
+    f.render_widget(Clear, rect);
+    let title = match &picker.base {
+        Some(base) => format!(" switch branch · numbered in merge order, against {base} "),
+        None => " switch branch ".to_string(),
+    };
+    let block = pane(Line::from(title.bold()), true)
+        .title_bottom(Line::from(" type to filter · Enter switch · Esc close ").right_aligned().fg(DIM));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let [input, head, list_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+
+    f.render_widget(
+        Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(picker.filter.text.clone())]),
+        input,
+    );
+    f.set_cursor_position(Position::new(
+        (input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)),
+        input.y,
+    ));
+
+    let name_w = picker.items.iter().map(|b| b.name.chars().count()).max().unwrap_or(0).clamp(6, 36);
+    let in_base = format!("in {}", picker.base.as_deref().unwrap_or("base"));
+    let commits_w = in_base.chars().count().max(7);
+    // The highlight symbol takes two columns in front of every row.
+    f.render_widget(
+        Line::from(format!(
+            "    #    {:<name_w$}  {:<16}  {:<16}  {:<commits_w$}  remote",
+            "branch", "work started", "last commit", "commits"
+        ))
+        .fg(DIM),
+        head,
+    );
+
+    let items: Vec<ListItem> = picker
+        .visible
+        .iter()
+        .map(|&i| {
+            let b = &picker.items[i];
+            let number = b.number.map_or_else(|| "   ".to_string(), |n| format!("{n:>3}"));
+            let mark = if b.current { "● " } else { "  " };
+            let name_style = if b.current { Style::new().fg(ACCENT).bold() } else { Style::new().bold() };
+            let started = b.started.as_ref().map_or("—", |s| s.1.as_str());
+            let (commits, commits_color) = if b.base {
+                ("base".to_string(), ACCENT)
+            } else if b.ahead > 0 {
+                (format!("+{}", b.ahead), Color::Reset)
+            } else {
+                (in_base.clone(), DIM)
+            };
+            let (remote, remote_color) = branch_remote(b);
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{number}  "), Style::new().fg(Color::Yellow).bold()),
+                Span::styled(mark, Style::new().fg(ACCENT)),
+                Span::styled(format!("{:<name_w$}  ", truncate(&b.name, name_w)), name_style),
+                Span::styled(
+                    format!("{started:<16}  "),
+                    Style::new().fg(if b.started.is_some() { Color::Reset } else { DIM }),
+                ),
+                Span::raw(format!("{:<16}  ", b.last.1)),
+                Span::styled(format!("{commits:<commits_w$}  "), Style::new().fg(commits_color)),
+                Span::styled(remote, Style::new().fg(remote_color)),
+            ]))
+        })
+        .collect();
+    let list = List::new(items)
+        .highlight_symbol("▌ ")
+        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD));
+    f.render_stateful_widget(list, list_area, &mut picker.state);
+}
+
+/// How a branch stands with its remote, for the last column of the `g o` picker.
+fn branch_remote(b: &git::Branch) -> (String, Color) {
+    if b.remote_only {
+        return ("only on the remote".into(), DIM);
+    }
+    match b.upstream {
+        git::Upstream::None => ("not pushed".into(), DIM),
+        git::Upstream::Gone => ("deleted on the remote".into(), Color::Yellow),
+        git::Upstream::Track { ahead: 0, behind: 0 } => ("pushed".into(), Color::Green),
+        git::Upstream::Track { ahead, behind } => {
+            let parts: Vec<String> = [(ahead, "to push"), (behind, "to pull")]
+                .into_iter()
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, what)| format!("{n} {what}"))
+                .collect();
+            (parts.join(", "), Color::Yellow)
+        }
+    }
 }
 
 fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
