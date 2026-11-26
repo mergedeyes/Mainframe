@@ -28,6 +28,8 @@ pub struct DeployPicker {
     pub state: ListState,
     /// keep_deploy_builds from the config, for the summary.
     pub keep_build: bool,
+    /// The settings file doesn't parse, so no targets show.
+    pub broken: bool,
 }
 
 impl DeployPicker {
@@ -65,7 +67,11 @@ impl App {
     pub(super) fn open_deploy(&mut self, select: Option<&str>) {
         self.load_settings(true);
         let root = self.settings_root.clone();
-        if self.settings.deploy.is_empty() {
+        // A file that doesn't parse reads as no targets; the picker (with E) beats a form
+        // for a new one then, and the status line says what's wrong.
+        let broken = self.settings.deploy.is_empty()
+            && fs::read_to_string(settings::file_for(&root)).is_ok_and(|t| toml::from_str::<ProjectSettings>(&t).is_err());
+        if self.settings.deploy.is_empty() && !broken {
             return self.new_deploy_form();
         }
         let targets = self.settings.deploy.clone();
@@ -76,6 +82,7 @@ impl App {
             targets,
             state: ListState::default().with_selected(Some(pos)),
             keep_build: self.config.keep_deploy_builds,
+            broken,
         });
     }
 
@@ -89,6 +96,9 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Char('j') | KeyCode::Down => picker.state.select(Some((cur + 1).min(len.saturating_sub(1)))),
             KeyCode::Char('k') | KeyCode::Up => picker.state.select(Some(cur.saturating_sub(1))),
+            KeyCode::Char('a') if picker.broken => {
+                self.set_status("the settings file doesn't parse — E opens it", Level::Err);
+            }
             KeyCode::Char('a') => self.new_deploy_form(),
             KeyCode::Char('e') => {
                 if let Some(d) = target {

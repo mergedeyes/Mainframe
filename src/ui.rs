@@ -1005,6 +1005,12 @@ fn draw_deploy(f: &mut Frame, picker: &mut DeployPicker, area: Rect) {
         label("settings"),
         Span::styled(pretty_path(&crate::settings::file_for(&picker.root)), Style::new().fg(DIM)),
     ]));
+    if picker.broken {
+        details.push(Line::from(vec![
+            label(""),
+            Span::styled("doesn't parse, so no targets show — E opens it, the status line says where", Style::new().fg(Color::Red)),
+        ]));
+    }
 
     let rect = popup(area, 110, picker.targets.len() as u16 + details.len() as u16 + 4);
     f.render_widget(Clear, rect);
