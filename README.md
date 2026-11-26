@@ -64,7 +64,8 @@ unless you ask for it.
   desktop entries, deploy targets with backups, rollback and systemd
   services, set up and edited in the TUI.
 - **Projects:** project picker, notes and todos, new projects with
-  `git init`, a CLAUDE.md template for Claude Code.
+  `git init`, a CLAUDE.md template for Claude Code that `Ctrl-L` brings
+  into any existing project.
 - **Cleanup:** build output, dependencies and caches, across projects and
   worktrees, measured as on disk on compressed btrfs.
 

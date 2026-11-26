@@ -479,6 +479,7 @@ impl App {
                 KeyCode::Char('d') => self.browser.move_by(self.browser_height as isize / 2),
                 KeyCode::Char('u') => self.browser.move_by(-(self.browser_height as isize / 2)),
                 KeyCode::Char('p') => self.open_file_finder(),
+                KeyCode::Char('l') => self.preset_here(),
                 _ => {}
             }
             return;

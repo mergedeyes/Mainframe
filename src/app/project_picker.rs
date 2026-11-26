@@ -132,6 +132,15 @@ impl App {
         }
     }
 
+    /// `^L` in the file list: the preset for the project you're in, without going through `J`.
+    pub(super) fn preset_here(&mut self) {
+        let dir = projects::dir(&self.config);
+        match projects::owner(&self.browser.cwd, dir.as_deref(), self.git.as_ref(), self.project.as_ref()) {
+            Some(root) => self.confirm_preset(root),
+            None => self.set_status("not in a project — ^L needs a project folder or a git repo", Level::Info),
+        }
+    }
+
     /// `^L`: says what bringing the CLAUDE.md preset into the project will do, and asks.
     fn confirm_preset(&mut self, dir: PathBuf) {
         let name = folder_name(&dir);

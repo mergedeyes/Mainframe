@@ -56,6 +56,7 @@ action on a key replaces what the key does here.
 | `C` | cleanup |
 | `g` | git menu |
 | `M` | notes and todos |
+| `Ctrl-L` | bring the CLAUDE.md preset into this project |
 | `:` | run a shell command |
 | `!` | open your shell here |
 | `,` | edit the configuration |

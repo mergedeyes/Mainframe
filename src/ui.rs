@@ -537,6 +537,7 @@ const HELP: [&[HelpSection]; 3] = [
                 ("C", "clean builds / caches"),
                 ("g", "git menu"),
                 ("M", "project notes / todos"),
+                ("^L", "CLAUDE.md preset"),
                 (":", "shell command"),
                 ("!", "open shell here"),
                 (",", "edit config"),
