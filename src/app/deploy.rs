@@ -11,7 +11,7 @@ use ratatui::{
     widgets::ListState,
 };
 
-use super::{App, Confirmed, Foreground, Level, Mode};
+use super::{App, Confirmed, Level, Mode};
 use crate::{
     config, filter_list,
     form::{Field, Form, FormKind},
@@ -146,13 +146,7 @@ impl App {
             Ok(path) => {
                 self.mode = Mode::Normal;
                 self.reopen_deploy = true;
-                self.pending = Some(Foreground {
-                    cmd: format!("{} {}", self.config.editor, quote(&path)),
-                    cwd: self.browser.cwd.clone(),
-                    wait: false,
-                    then_reload_config: false,
-                    cd_to_output: false,
-                });
+                self.edit_path(&path, "");
             }
             Err(e) => {
                 self.set_status(format!("can't create {}: {e}", config::pretty_path(&settings::dir())), Level::Err)

@@ -3,7 +3,7 @@
 use std::{
     env, fs,
     os::unix::process::CommandExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
 };
@@ -50,8 +50,28 @@ impl App {
             self.set_status(format!("{} is a binary file", e.name), Level::Err);
             return;
         }
+        let path = e.path.clone();
+        self.edit_path(&path, "");
+    }
+
+    /// Opens `path` in the editor; a missing file is created with `initial` first.
+    /// False when it couldn't be.
+    pub(super) fn edit_path(&mut self, path: &Path, initial: &str) -> bool {
+        if !path.exists() {
+            let created = path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(path, initial));
+            if let Err(e) = created {
+                self.set_status(format!("can't create {}: {e}", config::pretty_path(path)), Level::Err);
+                return false;
+            }
+        }
+        self.in_terminal(format!("{} {}", self.config.editor, quote(path)));
+        true
+    }
+
+    /// Hands the terminal to `cmd` and comes back as soon as it exits.
+    pub(super) fn in_terminal(&mut self, cmd: String) {
         self.pending = Some(Foreground {
-            cmd: format!("{} {}", self.config.editor, quote(&e.path)),
+            cmd,
             cwd: self.browser.cwd.clone(),
             wait: false,
             then_reload_config: false,
@@ -66,34 +86,17 @@ impl App {
             self.spawn_detached(&locate::editor_cmd(&self.config.vscode, &loc));
             self.set_status(format!("opened {}:{} in VS Code", config::pretty_path(&loc.path), loc.line), Level::Ok);
         } else {
-            self.pending = Some(Foreground {
-                cmd: locate::editor_cmd(&self.config.editor, &loc),
-                cwd: self.browser.cwd.clone(),
-                wait: false,
-                then_reload_config: false,
-                cd_to_output: false,
-            });
+            self.in_terminal(locate::editor_cmd(&self.config.editor, &loc));
         }
         true
     }
 
     pub(super) fn edit_config(&mut self) {
-        let path = Config::path();
-        if !path.exists() {
-            let created =
-                path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&path, config::TEMPLATE));
-            if let Err(e) = created {
-                self.set_status(format!("can't create {}: {e}", path.display()), Level::Err);
-                return;
-            }
+        if self.edit_path(&Config::path(), config::TEMPLATE)
+            && let Some(fg) = &mut self.pending
+        {
+            fg.then_reload_config = true;
         }
-        self.pending = Some(Foreground {
-            cmd: format!("{} {}", self.config.editor, quote(&path)),
-            cwd: self.browser.cwd.clone(),
-            wait: false,
-            then_reload_config: true,
-            cd_to_output: false,
-        });
     }
 
     pub(super) fn open_vscode(&mut self, folder: bool) {
@@ -111,13 +114,7 @@ impl App {
 
     pub(super) fn open_shell(&mut self) {
         let shell = env::var("SHELL").unwrap_or_else(|_| "sh".into());
-        self.pending = Some(Foreground {
-            cmd: quote_str(&shell),
-            cwd: self.browser.cwd.clone(),
-            wait: false,
-            then_reload_config: false,
-            cd_to_output: false,
-        });
+        self.in_terminal(quote_str(&shell));
     }
 
     pub(super) fn run_op(&mut self, op: Op, interactive: bool) {

@@ -1,18 +1,17 @@
 //! `M`: the current project's notes and todos. Every change is saved right away.
 
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     widgets::ListState,
 };
 
-use super::{App, Foreground, Level, Mode};
+use super::{App, Level, Mode};
 use crate::{
     config,
     line::LineEdit,
     notes::{Item, Notes},
-    project::quote,
 };
 
 pub struct NotesView {
@@ -222,22 +221,8 @@ impl App {
     fn edit_notes_file(&mut self) {
         let Mode::Notes(view) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
         let path = view.notes.path.clone();
-        if !path.exists() {
-            let created = path
-                .parent()
-                .map_or(Ok(()), fs::create_dir_all)
-                .and_then(|_| fs::write(&path, format!("# {}\n\n", view.title)));
-            if let Err(e) = created {
-                return self.set_status(format!("can't create {}: {e}", config::pretty_path(&path)), Level::Err);
-            }
+        if self.edit_path(&path, &format!("# {}\n\n", view.title)) {
+            self.reopen_notes = Some((view.root, view.title));
         }
-        self.reopen_notes = Some((view.root, view.title));
-        self.pending = Some(Foreground {
-            cmd: format!("{} {}", self.config.editor, quote(&path)),
-            cwd: self.browser.cwd.clone(),
-            wait: false,
-            then_reload_config: false,
-            cd_to_output: false,
-        });
     }
 }

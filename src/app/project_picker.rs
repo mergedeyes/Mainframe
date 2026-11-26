@@ -1,17 +1,16 @@
 //! `J`: every project in the projects folder, most recently active first; jump to one,
 //! or make a new one (`^G`).
 
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{App, Confirmed, Foreground, Level, Mode};
+use super::{App, Confirmed, Level, Mode};
 use crate::{
     config,
     filter_list::{self, FilterList, Match},
     form::{Field, Form, FormKind},
     notes,
-    project::quote,
     projects::{self, Entry},
     scaffold,
 };
@@ -183,24 +182,11 @@ impl App {
     /// `^T` in the new-project form: the CLAUDE.md template in the editor, copied from the
     /// built-in one first if there's no file yet. The form stays open underneath.
     pub(super) fn edit_claude_template(&mut self) {
-        let path = scaffold::template_path();
-        if !path.exists() {
-            let created =
-                path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&path, scaffold::CLAUDE_MD));
-            if let Err(e) = created {
-                return self.set_status(format!("can't create {}: {e}", path.display()), Level::Err);
-            }
-        }
-        if let Mode::Form(form) = &mut self.mode {
+        if self.edit_path(&scaffold::template_path(), scaffold::CLAUDE_MD)
+            && let Mode::Form(form) = &mut self.mode
+        {
             form.note = Some(template_note());
         }
-        self.pending = Some(Foreground {
-            cmd: format!("{} {}", self.config.editor, quote(&path)),
-            cwd: self.browser.cwd.clone(),
-            wait: false,
-            then_reload_config: false,
-            cd_to_output: false,
-        });
     }
 }
 
