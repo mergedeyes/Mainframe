@@ -211,6 +211,40 @@ pub fn local_branches(cwd: &Path) -> Vec<String> {
     git_lines(cwd, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"])
 }
 
+/// Turns whatever was typed into a branch name git and GitHub take: lowercase, words
+/// joined by `-`, `/` (or a `:` as in `feat: thing`) kept as the folder separator.
+/// Characters git refuses (space, `~^:?*[\`, `..`, `@{`, a leading `-` or `.`, a
+/// trailing `.lock`) never come out. Empty when nothing usable was typed.
+pub fn branch_name(input: &str) -> String {
+    let mapped: String = input
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            ':' => '/',
+            c if c.is_alphanumeric() || matches!(c, '/' | '.' | '_') => c,
+            _ => '-',
+        })
+        .collect();
+    let mut parts = Vec::new();
+    for part in mapped.split('/') {
+        let mut s = String::new();
+        for c in part.chars() {
+            // Runs of `-` or `.` become one, so no `--` or `..`.
+            if !(matches!(c, '-' | '.') && s.ends_with(c)) {
+                s.push(c);
+            }
+        }
+        let mut s = s.trim_matches(['-', '.']);
+        while let Some(rest) = s.strip_suffix(".lock") {
+            s = rest.trim_end_matches(['-', '.']);
+        }
+        if !s.is_empty() {
+            parts.push(s.to_string());
+        }
+    }
+    parts.join("/")
+}
+
 /// `git push` for a local branch other than (or the same as) the checked-out one, without
 /// switching to it: to the remote it tracks, or to origin with upstream set when it has none.
 pub fn push_branch_cmd(cwd: &Path, branch: &str) -> Result<String, String> {
@@ -450,7 +484,7 @@ pub const MENU: &[(&str, &[MenuItem])] = &[
         &[
             item('b', "list branches"),
             item('o', "switch branch, merge order…"),
-            item('n', "new branch…"),
+            item('n', "new branch… (name tidied)"),
             item('W', "remove a worktree…"),
             item('z', "stash"),
             item('Z', "stash pop"),
@@ -538,6 +572,36 @@ pub fn gh_repo_create_cmd(form: &Form) -> String {
         cmd.push_str(" --push");
     }
     cmd
+}
+
+#[cfg(test)]
+mod branch_name_tests {
+    use super::*;
+    use crate::testutil::{git as test_git, temp_dir};
+
+    #[test]
+    fn formats_typed_text() {
+        assert_eq!(branch_name("Fix login bug"), "fix-login-bug");
+        assert_eq!(branch_name("feat: Add dark mode (WIP)"), "feat/add-dark-mode-wip");
+        assert_eq!(branch_name("fix/ crash on  empty   list "), "fix/crash-on-empty-list");
+        assert_eq!(branch_name("--hotfix--"), "hotfix");
+        assert_eq!(branch_name("a..b ~^?*[\\ c"), "a.b-c");
+        assert_eq!(branch_name("feat//.hidden/x.lock"), "feat/hidden/x");
+        assert_eq!(branch_name("@{u}"), "u");
+        assert_eq!(branch_name("Übersetzung für v1.2_beta"), "übersetzung-für-v1.2_beta");
+        assert_eq!(branch_name("  / :: ?? "), "");
+    }
+
+    /// Whatever comes out, git itself agrees it's a valid branch name.
+    #[test]
+    fn git_accepts_the_result() {
+        let dir = temp_dir("branchname");
+        let inputs = ["feat: Add X", "..a/b.lock.lock/", "-x -", "a@{b}", "x/./y", "tab\there", "dots...end."];
+        for name in inputs.map(branch_name) {
+            test_git(&dir, &["check-ref-format", "--branch", &name]);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[cfg(test)]

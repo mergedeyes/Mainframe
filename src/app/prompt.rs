@@ -134,8 +134,12 @@ impl App {
                 self.start_task("git commit".into(), Plan { cmd, cwd });
             }
             PromptKind::NewBranch => {
-                let cmd = format!("{GIT} switch -c {}", quote_str(&input));
-                self.start_task("git switch -c".into(), Plan { cmd, cwd });
+                let name = git::branch_name(&input);
+                if name.is_empty() {
+                    return self.set_status(format!("no usable branch name in {input:?}"), Level::Err);
+                }
+                let cmd = format!("{GIT} switch -c {}", quote_str(&name));
+                self.start_task(format!("git switch -c {name}"), Plan { cmd, cwd });
             }
             PromptKind::RemoveWorktree => self.confirm_remove_worktree(input.trim()),
             PromptKind::PushBranch => match git::push_branch_cmd(&cwd, input.trim()) {
