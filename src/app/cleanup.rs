@@ -16,8 +16,8 @@ use ratatui::{
 
 use super::{App, Confirmed, Level, Mode};
 use crate::{
-    config,
     cleanup::{self, Item},
+    config,
     project::{self, Plan, quote},
 };
 
@@ -65,7 +65,10 @@ impl App {
         let (title, root) = match project::detect(&start) {
             Some(p) => (p.name, p.root),
             None if start == config::home() || start.parent().is_none() => {
-                return self.set_status("no project here — C cleans a project or a folder of projects, not all of ~", Level::Err);
+                return self.set_status(
+                    "no project here — C cleans a project or a folder of projects, not all of ~",
+                    Level::Err,
+                );
             }
             None => (config::pretty_path(&start), start),
         };
@@ -145,8 +148,13 @@ impl App {
         let size = chosen.iter().all(|i| i.size.is_some()).then(|| cleanup::total(&chosen));
         let steps: Vec<String> = chosen.iter().map(|i| i.command(&root)).collect();
         // A script file, so the output pane shows one short command line.
-        let file = config::state_dir().join("cleanup").join(format!("{}.sh", config::pretty_path(&root).replace(|c: char| !c.is_ascii_alphanumeric(), "-")));
-        let written = file.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&file, cleanup::script(&steps, &what, size)));
+        let file = config::state_dir()
+            .join("cleanup")
+            .join(format!("{}.sh", config::pretty_path(&root).replace(|c: char| !c.is_ascii_alphanumeric(), "-")));
+        let written = file
+            .parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|_| fs::write(&file, cleanup::script(&steps, &what, size)));
         if let Err(e) = written {
             return self.set_status(format!("can't write {}: {e}", config::pretty_path(&file)), Level::Err);
         }

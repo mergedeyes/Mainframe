@@ -132,9 +132,10 @@ pub fn plan(op: Op, target: Option<&Entry>, cwd: &Path, cfg: &Config) -> Result<
     let project = detect(&start);
 
     if let Some(f) = file
-        && let Some(plan) = file_plan(op, f, project.as_ref(), cfg) {
-            return Ok(plan);
-        }
+        && let Some(plan) = file_plan(op, f, project.as_ref(), cfg)
+    {
+        return Ok(plan);
+    }
 
     let Some(p) = project else {
         return Err(match file {
@@ -165,7 +166,9 @@ pub fn plan(op: Op, target: Option<&Entry>, cwd: &Path, cfg: &Config) -> Result<
         (Kind::Zig, Op::Test) => "zig build test",
         (Kind::CMake, Op::Run) => return Err("cmake doesn't say what to run — T lists its tasks".into()),
         (Kind::CMake, Op::Build) => "cmake -S . -B build && cmake --build build",
-        (Kind::CMake, Op::Release) => "cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release",
+        (Kind::CMake, Op::Release) => {
+            "cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release"
+        }
         (Kind::CMake, Op::Test) => "ctest --test-dir build --output-on-failure",
         (Kind::Meson, Op::Run) => return Err("meson doesn't say what to run — T lists its tasks".into()),
         (Kind::Meson, Op::Build) => "{ [ -d build ] || meson setup build; } && meson compile -C build",
@@ -251,7 +254,5 @@ pub fn quote_str(s: &str) -> String {
 
 /// Finds an executable on $PATH.
 pub fn which(name: &str) -> Option<PathBuf> {
-    env::split_paths(&env::var_os("PATH")?)
-        .map(|d| d.join(name))
-        .find(|p| p.is_file())
+    env::split_paths(&env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file())
 }

@@ -65,7 +65,8 @@ impl App {
     /// Moves new output into every tab, also other projects' (their tasks keep going),
     /// and wraps up tasks that finished.
     pub(super) fn poll_tasks(&mut self) {
-        let mut finished: Vec<(Option<String>, Finished)> = self.tabs.iter_mut().filter_map(poll_tab).map(|f| (None, f)).collect();
+        let mut finished: Vec<(Option<String>, Finished)> =
+            self.tabs.iter_mut().filter_map(poll_tab).map(|f| (None, f)).collect();
         let mut finished_in = Vec::new();
         for (root, ws) in &mut self.workspaces {
             let name = root.file_name().map(|n| n.to_string_lossy().into_owned());
@@ -99,7 +100,11 @@ impl App {
             let _ = std::io::stdout().flush();
             if project::which("notify-send").is_some() {
                 for (summary, body) in notify {
-                    self.spawn_detached(&format!("notify-send -a Mainframe {} {}", quote_str(&summary), quote_str(&body)));
+                    self.spawn_detached(&format!(
+                        "notify-send -a Mainframe {} {}",
+                        quote_str(&summary),
+                        quote_str(&body)
+                    ));
                 }
             }
         }
@@ -261,11 +266,8 @@ impl App {
             Ok(rel) => rel.display().to_string(),
             Err(_) => config::pretty_path(&loc.path),
         };
-        let msg = format!(
-            "{}/{total}  {path}:{} — Enter edits · o opens in VS Code",
-            out.cursor.unwrap_or(0) + 1,
-            loc.line,
-        );
+        let msg =
+            format!("{}/{total}  {path}:{} — Enter edits · o opens in VS Code", out.cursor.unwrap_or(0) + 1, loc.line,);
         self.show_output = true;
         self.focus = Focus::Output;
         self.set_status(msg, Level::Info);

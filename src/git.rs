@@ -69,13 +69,8 @@ impl GitInfo {
 
 /// stdout of a successful `git` run in `cwd`.
 pub fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let out =
+        Command::new("git").args(args).current_dir(cwd).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
     out.status.success().then_some(out.stdout)
 }
 
@@ -289,22 +284,8 @@ pub const MENU: &[(&str, &[MenuItem])] = &[
             item('x', "discard changes to selected"),
         ],
     ),
-    (
-        "sync",
-        &[
-            item('f', "fetch"),
-            item('p', "pull"),
-            item('P', "push"),
-            item('B', "push another branch…"),
-        ],
-    ),
-    (
-        "release (gh)",
-        &[
-            item('r', "release… bump, tag, CI"),
-            item('R', "releases & CI runs"),
-        ],
-    ),
+    ("sync", &[item('f', "fetch"), item('p', "pull"), item('P', "push"), item('B', "push another branch…")]),
+    ("release (gh)", &[item('r', "release… bump, tag, CI"), item('R', "releases & CI runs")]),
     (
         "branches",
         &[
@@ -318,11 +299,7 @@ pub const MENU: &[(&str, &[MenuItem])] = &[
     ),
     (
         "other",
-        &[
-            item('i', "init repo here"),
-            item('h', "create GitHub repo… (gh)"),
-            item('g', "lazygit / gitui / tig"),
-        ],
+        &[item('i', "init repo here"), item('h', "create GitHub repo… (gh)"), item('g', "lazygit / gitui / tig")],
     ),
 ];
 
@@ -396,7 +373,12 @@ pub fn gh_repo_create_cmd(form: &Form) -> String {
     if git(&source, &["rev-parse", "--git-dir"]).is_none() {
         cmd.push_str("git init && git add -A && git commit -m 'Initial commit' && ");
     }
-    cmd.push_str(&format!("gh repo create {} --{} --source=. --remote={}", q(&repo), form.get("visibility"), q(form.get("remote"))));
+    cmd.push_str(&format!(
+        "gh repo create {} --{} --source=. --remote={}",
+        q(&repo),
+        form.get("visibility"),
+        q(form.get("remote"))
+    ));
     let desc = form.get("description").trim();
     if !desc.is_empty() {
         cmd.push_str(&format!(" --description {}", q(desc)));
@@ -419,7 +401,12 @@ mod push_tests {
         let (repo, remote) = (base.join("repo"), base.join("remote.git"));
         std::fs::create_dir_all(&repo).unwrap();
         let run = |dir: &Path, args: &[&str]| {
-            let out = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(dir).output().unwrap();
+            let out = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
             assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         };
         run(&base, &["init", "-q", "--bare", "remote.git"]);
@@ -461,7 +448,12 @@ mod worktree_tests {
         let main = base.join("repo");
         std::fs::create_dir_all(&main).unwrap();
         let run = |args: &[&str]| {
-            let out = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(&main).output().unwrap();
+            let out = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&main)
+                .output()
+                .unwrap();
             assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         };
         run(&["init", "-q", "-b", "main"]);

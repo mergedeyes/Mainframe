@@ -70,7 +70,9 @@ impl Completer {
                 if self.zoxide && !input.trim().is_empty() && !looks_like_path {
                     let cwd = env::current_dir().unwrap_or_default();
                     let local: Vec<PathBuf> = items.iter().map(|i| cwd.join(i.insert.trim_end_matches('/'))).collect();
-                    items.extend(zoxide(input, &cwd).into_iter().filter(|z| !local.iter().any(|l| l == Path::new(&z.insert))));
+                    items.extend(
+                        zoxide(input, &cwd).into_iter().filter(|z| !local.iter().any(|l| l == Path::new(&z.insert))),
+                    );
                 }
                 (0, items)
             }
@@ -206,11 +208,7 @@ fn words(list: &[String], input: &str) -> Vec<Item> {
     if starts.is_empty() {
         starts = list.iter().filter(|w| fold(w).contains(&needle)).collect();
     }
-    starts
-        .into_iter()
-        .take(MAX_ITEMS)
-        .map(|w| Item { insert: w.clone(), display: w.clone(), is_dir: false })
-        .collect()
+    starts.into_iter().take(MAX_ITEMS).map(|w| Item { insert: w.clone(), display: w.clone(), is_dir: false }).collect()
 }
 
 fn programs(list: &[String], prefix: &str) -> Vec<Item> {

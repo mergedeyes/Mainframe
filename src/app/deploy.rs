@@ -153,7 +153,9 @@ impl App {
                     cd_to_output: false,
                 });
             }
-            Err(e) => self.set_status(format!("can't create {}: {e}", config::pretty_path(&settings::dir())), Level::Err),
+            Err(e) => {
+                self.set_status(format!("can't create {}: {e}", config::pretty_path(&settings::dir())), Level::Err)
+            }
         }
     }
 
@@ -193,7 +195,8 @@ impl App {
         let has_key = std::env::var_os("SSH_AUTH_SOCK").is_some()
             || fs::read_dir(config::home().join(".ssh"))
                 .is_ok_and(|d| d.flatten().any(|e| e.file_name().to_string_lossy().starts_with("id_")));
-        let note = (!has_key).then(|| "no ssh key found — ssh-keygen + ssh-copy-id <host>, or run it in the terminal".to_string());
+        let note = (!has_key)
+            .then(|| "no ssh key found — ssh-keygen + ssh-copy-id <host>, or run it in the terminal".to_string());
         let defaults = Deploy {
             name,
             host: "pi@raspberrypi.local".into(),
@@ -204,7 +207,12 @@ impl App {
             ..Deploy::default()
         };
         self.mode = Mode::Form(Form {
-            kind: FormKind::Deploy { root: root.clone(), taken, keep_build: self.config.keep_deploy_builds, editing: None },
+            kind: FormKind::Deploy {
+                root: root.clone(),
+                taken,
+                keep_build: self.config.keep_deploy_builds,
+                editing: None,
+            },
             title: format!(" new deploy target · {} ", Self::project_title(&root)),
             fields: deploy_fields(&defaults, false),
             step: 0,
@@ -218,7 +226,12 @@ impl App {
         let root = self.settings_root.clone();
         let taken: Vec<String> = self.settings.deploy.iter().map(|t| t.name.clone()).filter(|n| *n != d.name).collect();
         self.mode = Mode::Form(Form {
-            kind: FormKind::Deploy { root: root.clone(), taken, keep_build: self.config.keep_deploy_builds, editing: Some(idx) },
+            kind: FormKind::Deploy {
+                root: root.clone(),
+                taken,
+                keep_build: self.config.keep_deploy_builds,
+                editing: Some(idx),
+            },
             title: format!(" edit deploy target {} · {} ", d.name, Self::project_title(&root)),
             fields: deploy_fields(d, true),
             step: 0,
@@ -235,7 +248,9 @@ impl App {
                 if self.settings.deploy.is_empty() {
                     self.mode = Mode::Normal;
                 } else {
-                    self.open_deploy(self.settings.deploy.get(idx.saturating_sub(1)).map(|d| d.name.clone()).as_deref());
+                    self.open_deploy(
+                        self.settings.deploy.get(idx.saturating_sub(1)).map(|d| d.name.clone()).as_deref(),
+                    );
                 }
                 self.set_status(format!("deleted deploy target {name}"), Level::Ok);
             }
@@ -249,7 +264,13 @@ impl App {
         let d = deploy_from_form(form);
         let problem = d
             .problem()
-            .or_else(|| form.get("keep").trim().parse::<usize>().is_err().then(|| "keep must be a number; 0 keeps all backups".into()))
+            .or_else(|| {
+                form.get("keep")
+                    .trim()
+                    .parse::<usize>()
+                    .is_err()
+                    .then(|| "keep must be a number; 0 keeps all backups".into())
+            })
             .or_else(|| taken.contains(&d.name).then(|| format!("there's a target named {} already", d.name)));
         if let Some(p) = problem {
             self.set_status(p, Level::Err);
@@ -303,7 +324,8 @@ fn deploy_fields(d: &Deploy, edit: bool) -> Vec<Field> {
             Field::text(label, value, hint)
         }
     };
-    let build_hint = if edit { "runs in the project root · empty: none" } else { "runs in the project root · - for none" };
+    let build_hint =
+        if edit { "runs in the project root · empty: none" } else { "runs in the project root · - for none" };
     vec![
         text("name", &d.name, "what the picker calls it"),
         text("host", &d.host, "user@host or an alias from ~/.ssh/config"),
@@ -317,7 +339,12 @@ fn deploy_fields(d: &Deploy, edit: bool) -> Vec<Field> {
         text("keep", &d.keep.to_string(), "backups to keep there · 0 keeps all"),
         text("ssh", &d.ssh, "extra ssh options, e.g. -p 2222 -i ~/.ssh/pi"),
         text("key", &d.key, "optional key that deploys without the picker, e.g. F9"),
-        Field::choice("run", &["background", "terminal"], usize::from(d.interactive), "terminal: when ssh or sudo ask for a password"),
+        Field::choice(
+            "run",
+            &["background", "terminal"],
+            usize::from(d.interactive),
+            "terminal: when ssh or sudo ask for a password",
+        ),
     ]
 }
 
@@ -337,14 +364,18 @@ fn guess(root: &Path, project: Option<&project::Project>, install_dir: &Path) ->
     let name = project.map_or(dir_name.clone(), |p| p.name.clone());
 
     if kind == Some(Kind::Cargo) {
-        let arm = install::scan(root, install_dir).into_iter().find(|c| {
-            c.triple.as_deref().is_some_and(|t| t.starts_with("aarch64") || t.starts_with("arm"))
-        });
+        let arm = install::scan(root, install_dir)
+            .into_iter()
+            .find(|c| c.triple.as_deref().is_some_and(|t| t.starts_with("aarch64") || t.starts_with("arm")));
         if let Some(c) = arm {
             let triple = c.triple.clone().unwrap_or_default();
             let release = if c.kind.starts_with("release") { " --release" } else { "" };
             let example = if c.kind.contains("example") { format!(" --example {}", c.name) } else { String::new() };
-            return Guess { build: format!("{cargo} build{release} --target {triple}{example}"), artifact: c.rel, bin: c.name };
+            return Guess {
+                build: format!("{cargo} build{release} --target {triple}{example}"),
+                artifact: c.rel,
+                bin: c.name,
+            };
         }
         return Guess {
             build: format!("{cargo} build --release --target {PI_TRIPLE}"),
@@ -356,6 +387,7 @@ fn guess(root: &Path, project: Option<&project::Project>, install_dir: &Path) ->
         let out = format!("build/{dir_name}-linux-arm64");
         return Guess { build: format!("GOOS=linux GOARCH=arm64 go build -o {out} ."), artifact: out, bin: dir_name };
     }
-    let build = project.and_then(|p| project::plan(Op::Release, None, &p.root, &Default::default()).ok()).map(|p| p.cmd);
+    let build =
+        project.and_then(|p| project::plan(Op::Release, None, &p.root, &Default::default()).ok()).map(|p| p.cmd);
     Guess { build: build.unwrap_or_default(), artifact: String::new(), bin: dir_name }
 }

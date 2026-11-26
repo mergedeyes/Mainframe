@@ -7,12 +7,15 @@ use ratatui::{
 };
 
 use crate::{
-    app::{AfterReview, App, CleanupPicker, DeployPicker, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode, NotesView, ProjectPicker, TaskPicker},
-    complete::Completer,
-    form::{Form, FormKind},
+    app::{
+        AfterReview, App, CleanupPicker, DeployPicker, DesktopReview, FileFinder, Focus, InstallPicker, Level, Mode,
+        NotesView, ProjectPicker, TaskPicker,
+    },
     browser::{Preview, Sort, human_size},
+    complete::Completer,
     config::pretty_path,
     desktop::{self, Change, Status as DesktopStatus},
+    form::{Form, FormKind},
     git,
     install::{self, Installed},
     notes::Item,
@@ -106,7 +109,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let mut badges = Vec::new();
     if let Some(p) = &app.project {
         badges.push(Span::raw("  "));
-        badges.push(Span::styled(format!(" {} · {} ", p.kind.label(), p.name), Style::new().fg(Color::Black).bg(Color::Yellow)));
+        badges.push(Span::styled(
+            format!(" {} · {} ", p.kind.label(), p.name),
+            Style::new().fg(Color::Black).bg(Color::Yellow),
+        ));
     }
     if let Some(g) = &app.git {
         badges.push(Span::raw("  "));
@@ -149,8 +155,8 @@ fn draw_browser(f: &mut Frame, app: &mut App, area: Rect) {
         title.push(Span::styled(format!("↓ {} ", b.sort.label()), Style::new().fg(DIM)));
     }
     let count = format!(" {}/{} ", b.state.selected().map_or(0, |i| i + 1), b.visible.len());
-    let mut block = pane(Line::from(title), app.focus == Focus::Browser)
-        .title_bottom(Line::from(count).right_aligned().fg(DIM));
+    let mut block =
+        pane(Line::from(title), app.focus == Focus::Browser).title_bottom(Line::from(count).right_aligned().fg(DIM));
     if !b.marked.is_empty() {
         block = block.title_bottom(
             Line::from(format!(" {} marked · y d s u act on them · Esc clears ", b.marked.len())).fg(Color::Magenta),
@@ -165,11 +171,8 @@ fn draw_browser(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|&i| {
             let e = &b.entries[i];
-            let (mark, mark_col) = app
-                .git
-                .as_ref()
-                .and_then(|g| g.mark(&e.path, e.is_dir))
-                .unwrap_or((" ", Color::Reset));
+            let (mark, mark_col) =
+                app.git.as_ref().and_then(|g| g.mark(&e.path, e.is_dir)).unwrap_or((" ", Color::Reset));
             let style = if e.is_dir {
                 Style::new().fg(Color::Blue).bold()
             } else if e.is_symlink {
@@ -260,13 +263,7 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
         Some(Preview::Dir(items)) => items
             .iter()
             .take(height)
-            .map(|(n, dir)| {
-                if *dir {
-                    Line::from(format!("{n}/").blue().bold())
-                } else {
-                    Line::from(n.clone())
-                }
-            })
+            .map(|(n, dir)| if *dir { Line::from(format!("{n}/").blue().bold()) } else { Line::from(n.clone()) })
             .collect(),
         Some(Preview::Binary(size)) => {
             let mut v = vec![Line::from(format!("binary file · {}", human_size(*size)).fg(DIM))];
@@ -298,7 +295,11 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
                 (None, None) => Span::raw("·"),
             };
             let style = if i == app.tab { Style::new().bold().reversed() } else { Style::new().fg(DIM) };
-            title.extend([Span::raw(" "), state, Span::styled(format!(" {} {} ", i + 1, truncate(&t.label, 20)), style)]);
+            title.extend([
+                Span::raw(" "),
+                state,
+                Span::styled(format!(" {} {} ", i + 1, truncate(&t.label, 20)), style),
+            ]);
             if t.watch.is_some() {
                 title.push(Span::styled("⟳", Style::new().fg(Color::Magenta)));
             }
@@ -321,7 +322,8 @@ fn draw_output(f: &mut Frame, app: &mut App, area: Rect) {
     let out = &mut app.tabs[app.tab].output;
     if !out.search.is_empty() {
         let at = out.match_cursor.map_or(0, |c| c + 1);
-        title.push(Span::styled(format!("/{} {at}/{} ", out.search, out.matches.len()), Style::new().fg(Color::Yellow)));
+        title
+            .push(Span::styled(format!("/{} {at}/{} ", out.search, out.matches.len()), Style::new().fg(Color::Yellow)));
     } else if !out.locs.is_empty() {
         title.push(Span::styled(format!("{} file:line · n N jump ", out.locs.len()), Style::new().fg(Color::Yellow)));
     }
@@ -388,7 +390,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             return;
         }
         Mode::Confirm { msg, .. } => {
-            f.render_widget(Line::from(format!(" {msg} ")).style(Style::new().bg(Color::Yellow).fg(Color::Black).bold()), area);
+            f.render_widget(
+                Line::from(format!(" {msg} ")).style(Style::new().bg(Color::Yellow).fg(Color::Black).bold()),
+                area,
+            );
             return;
         }
         Mode::Search(edit) => {
@@ -434,16 +439,27 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let txt = |t: &'static str| Span::styled(t, Style::new().fg(DIM));
     let mut spans = vec![Span::raw(" ")];
     if let Some(hint) = &app.run_hint {
-        spans.extend([key("r "), Span::styled(format!("{} ", truncate(hint, 40)), Style::new().fg(Color::Green)), txt(" ")]);
+        spans.extend([
+            key("r "),
+            Span::styled(format!("{} ", truncate(hint, 40)), Style::new().fg(Color::Green)),
+            txt(" "),
+        ]);
     }
     spans.extend([
-        key("e"), txt(" edit  "),
-        key("b"), txt(" build  "),
-        key("i"), txt(" install  "),
-        key("o"), txt(" code  "),
-        key("g"), txt(" git  "),
-        key(":"), txt(" cmd  "),
-        key("?"), txt(" help"),
+        key("e"),
+        txt(" edit  "),
+        key("b"),
+        txt(" build  "),
+        key("i"),
+        txt(" install  "),
+        key("o"),
+        txt(" code  "),
+        key("g"),
+        txt(" git  "),
+        key(":"),
+        txt(" cmd  "),
+        key("?"),
+        txt(" help"),
     ]);
     f.render_widget(Line::from(spans), area);
 }
@@ -570,14 +586,7 @@ const HELP: [&[HelpSection]; 3] = [
                 ("/  ^S", "search / save it"),
             ],
         ),
-        (
-            "view",
-            &[
-                ("S", "sort name/newest/size"),
-                ("v / V", "preview / git diff"),
-                ("q", "quit"),
-            ],
-        ),
+        ("view", &[("S", "sort name/newest/size"), ("v / V", "preview / git diff"), ("q", "quit")]),
     ],
 ];
 
@@ -657,7 +666,8 @@ fn draw_git_menu(f: &mut Frame, info: Option<&git::GitInfo>, area: Rect) {
     let block = pane(Line::from(" git ".bold()), true).title_bottom(Line::from(" Esc close ").right_aligned().fg(DIM));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let [top, _, body] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+    let [top, _, body] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
     f.render_widget(status, top);
     let [l, r] = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(body);
     f.render_widget(Paragraph::new(left), l);
@@ -667,8 +677,9 @@ fn draw_git_menu(f: &mut Frame, info: Option<&git::GitInfo>, area: Rect) {
 fn draw_file_finder(f: &mut Frame, finder: &mut FileFinder, area: Rect) {
     let rect = popup(area, 100, area.height.saturating_sub(4));
     f.render_widget(Clear, rect);
-    let block = pane(Line::from(format!(" files in {} ", pretty_path(&finder.root)).bold()), true)
-        .title_bottom(Line::from(" type to filter · Enter show in list · ^E edit · Esc close ").right_aligned().fg(DIM));
+    let block = pane(Line::from(format!(" files in {} ", pretty_path(&finder.root)).bold()), true).title_bottom(
+        Line::from(" type to filter · Enter show in list · ^E edit · Esc close ").right_aligned().fg(DIM),
+    );
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
@@ -679,7 +690,10 @@ fn draw_file_finder(f: &mut Frame, finder: &mut FileFinder, area: Rect) {
         input,
     );
     f.render_widget(Line::from(count).right_aligned().fg(DIM), input);
-    f.set_cursor_position(Position::new((input.x + 3 + finder.filter.col() as u16).min(input.right().saturating_sub(1)), input.y));
+    f.set_cursor_position(Position::new(
+        (input.x + 3 + finder.filter.col() as u16).min(input.right().saturating_sub(1)),
+        input.y,
+    ));
 
     let items: Vec<ListItem> = finder
         .visible
@@ -705,7 +719,9 @@ fn draw_project_picker(f: &mut Frame, picker: &mut ProjectPicker, area: Rect) {
     let rect = popup(area, 90, picker.items.len() as u16 + 4);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(format!(" projects in {} ", pretty_path(&picker.root)).bold()), true).title_bottom(
-        Line::from(" type to filter · Enter go · ^T notes · ^O VS Code · ^G new · ^L CLAUDE.md · Esc close ").right_aligned().fg(DIM),
+        Line::from(" type to filter · Enter go · ^T notes · ^O VS Code · ^G new · ^L CLAUDE.md · Esc close ")
+            .right_aligned()
+            .fg(DIM),
     );
     let inner = block.inner(rect);
     f.render_widget(block, rect);
@@ -716,7 +732,10 @@ fn draw_project_picker(f: &mut Frame, picker: &mut ProjectPicker, area: Rect) {
         input,
     );
     f.render_widget(Line::from(format!("{} ", picker.visible.len())).right_aligned().fg(DIM), input);
-    f.set_cursor_position(Position::new((input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)), input.y));
+    f.set_cursor_position(Position::new(
+        (input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)),
+        input.y,
+    ));
 
     // name · kind · todos · age, the name taking what's left.
     let w = list_area.width.saturating_sub(2) as usize;
@@ -787,7 +806,14 @@ fn draw_notes(f: &mut Frame, view: &mut NotesView, area: Rect) {
                 Line::default(),
                 Line::from("  nothing here yet".fg(DIM)),
                 Line::default(),
-                Line::from(vec!["  a".fg(ACCENT).bold(), " add a todo   ".fg(DIM), "n".fg(ACCENT).bold(), " add a note   ".fg(DIM), "E".fg(ACCENT).bold(), " write in the editor".fg(DIM)]),
+                Line::from(vec![
+                    "  a".fg(ACCENT).bold(),
+                    " add a todo   ".fg(DIM),
+                    "n".fg(ACCENT).bold(),
+                    " add a note   ".fg(DIM),
+                    "E".fg(ACCENT).bold(),
+                    " write in the editor".fg(DIM),
+                ]),
                 Line::default(),
                 Line::from(format!("  saved in {}", pretty_path(&view.notes.path)).fg(DIM)),
             ]),
@@ -811,18 +837,20 @@ fn draw_notes(f: &mut Frame, view: &mut NotesView, area: Rect) {
             let text = match &view.editing {
                 Some(e) if editing == Some(i) => Span::raw(e.input.text.clone()),
                 _ => match item {
-                    Item::Todo { done: true, text, .. } => Span::styled(text.clone(), Style::new().fg(DIM).crossed_out()),
+                    Item::Todo { done: true, text, .. } => {
+                        Span::styled(text.clone(), Style::new().fg(DIM).crossed_out())
+                    }
                     Item::Todo { text, .. } => Span::raw(text.clone()),
-                    Item::Note(text) if text.starts_with('#') => Span::styled(text.clone(), Style::new().fg(ACCENT).bold()),
+                    Item::Note(text) if text.starts_with('#') => {
+                        Span::styled(text.clone(), Style::new().fg(ACCENT).bold())
+                    }
                     Item::Note(text) => Span::styled(text.clone(), Style::new().fg(Color::Gray)),
                 },
             };
             ListItem::new(Line::from(vec![Span::styled(lead, lead_style), text]))
         })
         .collect();
-    let list = List::new(items)
-        .highlight_symbol("▌ ")
-        .highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)));
+    let list = List::new(items).highlight_symbol("▌ ").highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)));
     f.render_stateful_widget(list, inner, &mut view.state);
 
     // The cursor sits in the line being edited.
@@ -850,7 +878,10 @@ fn draw_task_picker(f: &mut Frame, picker: &mut TaskPicker, area: Rect) {
         Line::from(vec![Span::styled(" › ", Style::new().fg(ACCENT).bold()), Span::raw(picker.filter.text.clone())]),
         input,
     );
-    f.set_cursor_position(Position::new((input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)), input.y));
+    f.set_cursor_position(Position::new(
+        (input.x + 3 + picker.filter.col() as u16).min(input.right().saturating_sub(1)),
+        input.y,
+    ));
 
     let name_w = picker.items.iter().map(|t| t.name.chars().count()).max().unwrap_or(0).min(28);
     let items: Vec<ListItem> = picker
@@ -874,15 +905,25 @@ fn draw_task_picker(f: &mut Frame, picker: &mut TaskPicker, area: Rect) {
 fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
     let rect = popup(area, 120, picker.len() as u16 + 14);
     f.render_widget(Clear, rect);
-    let block = pane(Line::from(format!(" install from {} ", pretty_path(&picker.root)).bold()), true)
-        .title_bottom(Line::from(" Enter install · d desktop entry · r run · u remove shadowing copy · Esc close ").right_aligned().fg(DIM));
+    let block = pane(Line::from(format!(" install from {} ", pretty_path(&picker.root)).bold()), true).title_bottom(
+        Line::from(" Enter install · d desktop entry · r run · u remove shadowing copy · Esc close ")
+            .right_aligned()
+            .fg(DIM),
+    );
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [head, list_area, details] =
         Layout::vertical([Constraint::Length(1), Constraint::Fill(1), Constraint::Length(8)]).areas(inner);
 
     let row = |name: &str, kind: &str, arch: &str, size: &str, age: &str| {
-        format!("{:<22} {:<16} {:<20} {:>8}  {:<10}", truncate(name, 22), truncate(kind, 16), truncate(arch, 20), size, age)
+        format!(
+            "{:<22} {:<16} {:<20} {:>8}  {:<10}",
+            truncate(name, 22),
+            truncate(kind, 16),
+            truncate(arch, 20),
+            size,
+            age
+        )
     };
     f.render_widget(
         Line::from(format!("  {}  status", row("name", "built as", "arch", "size", "built"))).fg(DIM),
@@ -893,11 +934,17 @@ fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect) {
     if picker.cargo {
         items.push(ListItem::new(Line::from(vec![
             Span::styled("⟳ cargo install --path .", Style::new().fg(Color::Yellow).bold()),
-            Span::styled(format!("   build release from source into {}", pretty_path(&picker.install_dir)), Style::new().fg(DIM)),
+            Span::styled(
+                format!("   build release from source into {}", pretty_path(&picker.install_dir)),
+                Style::new().fg(DIM),
+            ),
         ])));
     }
     for c in &picker.items {
-        let mut spans = vec![Span::raw(row(&c.name, &c.kind, &c.arch, &human_size(c.size), &install::age(c.modified))), Span::raw("  ")];
+        let mut spans = vec![
+            Span::raw(row(&c.name, &c.kind, &c.arch, &human_size(c.size), &install::age(c.modified))),
+            Span::raw("  "),
+        ];
         match c.installed {
             Installed::Same => spans.push("✓ installed".green()),
             Installed::Newer => spans.push("↑ newer than installed binary".yellow()),
@@ -1016,12 +1063,15 @@ fn draw_deploy(f: &mut Frame, picker: &mut DeployPicker, area: Rect) {
     let rect = popup(area, 110, picker.targets.len() as u16 + details.len() as u16 + 4);
     f.render_widget(Clear, rect);
     let block = pane(Line::from(format!(" deploy {} ", picker.title).bold()), true).title_bottom(
-        Line::from(" Enter deploy · u roll back · l backups · a add · e edit · x delete · E file · Esc close ").right_aligned().fg(DIM),
+        Line::from(" Enter deploy · u roll back · l backups · a add · e edit · x delete · E file · Esc close ")
+            .right_aligned()
+            .fg(DIM),
     );
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [list_area, _, details_area] =
-        Layout::vertical([Constraint::Length(picker.targets.len() as u16), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+        Layout::vertical([Constraint::Length(picker.targets.len() as u16), Constraint::Length(1), Constraint::Fill(1)])
+            .areas(inner);
 
     let items: Vec<ListItem> = picker
         .targets
@@ -1054,7 +1104,10 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
         let block = pane(title, true).title_bottom(Line::from(" Esc close ").right_aligned().fg(DIM));
         let inner = block.inner(rect);
         f.render_widget(block, rect);
-        f.render_widget(Line::from(vec![Span::styled(format!(" {spin} "), Style::new().fg(ACCENT)), "measuring…".fg(DIM)]), inner);
+        f.render_widget(
+            Line::from(vec![Span::styled(format!(" {spin} "), Style::new().fg(ACCENT)), "measuring…".fg(DIM)]),
+            inner,
+        );
         return;
     }
 
@@ -1089,8 +1142,9 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
     let rows = items.len() as u16;
     let rect = popup(area, 100, rows + details.len() as u16 + 4);
     f.render_widget(Clear, rect);
-    let block = pane(title, true)
-        .title_bottom(Line::from(" Space mark · a mark all like this · Enter clean · Esc close ").right_aligned().fg(DIM));
+    let block = pane(title, true).title_bottom(
+        Line::from(" Space mark · a mark all like this · Enter clean · Esc close ").right_aligned().fg(DIM),
+    );
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [list_area, _, details_area] =
@@ -1105,7 +1159,10 @@ fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect) {
             let size = i.size.map_or_else(|| "–".to_string(), |u| u.short());
             ListItem::new(Line::from(vec![
                 Span::styled(mark, Style::new().fg(Color::Yellow)),
-                Span::styled(format!("{:<label_w$}", truncate(&i.title(), label_w)), Style::new().fg(Color::Yellow).bold()),
+                Span::styled(
+                    format!("{:<label_w$}", truncate(&i.title(), label_w)),
+                    Style::new().fg(Color::Yellow).bold(),
+                ),
                 Span::raw(format!("{size:>9}  ")),
                 Span::styled(i.location(), Style::new().fg(DIM)),
             ]))
@@ -1134,7 +1191,11 @@ fn draw_desktop_review(f: &mut Frame, review: &DesktopReview, area: Rect) {
     };
     let mut head = vec![
         Line::from(vec![label("from"), Span::raw(pretty_path(&plan.src))]),
-        Line::from(vec![label("to"), Span::raw(pretty_path(&plan.target)), Span::styled(format!("  ({how})"), Style::new().fg(DIM))]),
+        Line::from(vec![
+            label("to"),
+            Span::raw(pretty_path(&plan.target)),
+            Span::styled(format!("  ({how})"), Style::new().fg(DIM)),
+        ]),
     ];
     match &review.then {
         AfterReview::InstallBinary(c, _) => head.push(Line::from(vec![
@@ -1167,7 +1228,8 @@ fn draw_desktop_review(f: &mut Frame, review: &DesktopReview, area: Rect) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let [head_area, _, body_area] =
-        Layout::vertical([Constraint::Length(head.len() as u16), Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+        Layout::vertical([Constraint::Length(head.len() as u16), Constraint::Length(1), Constraint::Fill(1)])
+            .areas(inner);
     f.render_widget(Paragraph::new(head), head_area);
     f.render_widget(Paragraph::new(body).scroll((review.scroll, 0)), body_area);
 }
@@ -1177,9 +1239,12 @@ fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
     let (steps, verb, heading, leads) = match &form.kind {
         FormKind::GhRepoCreate => (vec![crate::git::gh_repo_create_cmd(form)], "create", "command", ("  $  ", "  && ")),
         FormKind::Release(ctx) => (crate::release::steps(form, ctx), "release", "command", ("  $  ", "  && ")),
-        FormKind::Deploy { root, keep_build, .. } => {
-            (crate::app::deploy_from_form(form).summary(root, *keep_build), "save", "D then Enter will", ("  ·  ", "  ·  "))
-        }
+        FormKind::Deploy { root, keep_build, .. } => (
+            crate::app::deploy_from_form(form).summary(root, *keep_build),
+            "save",
+            "D then Enter will",
+            ("  ·  ", "  ·  "),
+        ),
         FormKind::NewProject => (crate::scaffold::steps(form), "create", "will", ("  ·  ", "  ·  ")),
     };
     let w = 92.min(area.width.saturating_sub(2));

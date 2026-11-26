@@ -391,7 +391,9 @@ pub fn form(root: &Path, branch: &str, dirty: bool) -> Result<Form, String> {
     fields.push(Field::choice("remote", &remote_names, remote_i, "gets the commit and the tag"));
     fields.push(match &workflow {
         Some(wf) => Field::choice("then", &[WATCH, "stop"], 0, format!("the tag starts {wf}")),
-        None => Field::choice("then", &[GH_RELEASE, "tag only"], 0, "no tag workflow — gh release create --generate-notes"),
+        None => {
+            Field::choice("then", &[GH_RELEASE, "tag only"], 0, "no tag workflow — gh release create --generate-notes")
+        }
     });
 
     let note = if let Some(p) = &pending {
@@ -481,7 +483,8 @@ pub fn check(form: &Form, ctx: &Ctx) -> Result<(), String> {
     // Round two of `open PR`: don't tag before the PR is in.
     if bump == DONE
         && let Some(repo) = ctx.repo(remote)
-        && let Some(open) = gh(&["pr", "view", &br, "-R", repo, "--json", "state,url", "--jq", "select(.state == \"OPEN\") | .url"])
+        && let Some(open) =
+            gh(&["pr", "view", &br, "-R", repo, "--json", "state,url", "--jq", "select(.state == \"OPEN\") | .url"])
         && !open.is_empty()
     {
         return Err(format!("the release PR isn't merged yet — wait for CI, merge it on GitHub: {open}"));
@@ -534,7 +537,9 @@ pub fn steps(form: &Form, ctx: &Ctx) -> Vec<String> {
             let next = if ctx.pr_checks { "Next: once the checks pass, merge" } else { "Next: merge" };
             s.push(format!(
                 "echo && echo {}",
-                quote_str(&format!("{next} the PR on GitHub (link above), then g r again: it tags {tag} and releases."))
+                quote_str(&format!(
+                    "{next} the PR on GitHub (link above), then g r again: it tags {tag} and releases."
+                ))
             ));
             return s;
         }

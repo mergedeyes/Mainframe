@@ -90,11 +90,9 @@ pub fn list(p: &Project) -> Vec<Target> {
             }
         }
         Kind::Meson => {
-            for (name, cmd) in [
-                ("setup", "meson setup build"),
-                ("compile", "meson compile -C build"),
-                ("test", "meson test -C build"),
-            ] {
+            for (name, cmd) in
+                [("setup", "meson setup build"), ("compile", "meson compile -C build"), ("test", "meson test -C build")]
+            {
                 add("meson", name, cmd.into());
             }
         }
@@ -126,10 +124,8 @@ pub fn list(p: &Project) -> Vec<Target> {
 /// and for binaries the package itself when it has a `src/main.rs`.
 fn cargo_targets(root: &Path, kind: &str) -> Vec<String> {
     let mut names = BTreeSet::new();
-    let manifest: toml::Table = fs::read_to_string(root.join("Cargo.toml"))
-        .ok()
-        .and_then(|t| toml::from_str(&t).ok())
-        .unwrap_or_default();
+    let manifest: toml::Table =
+        fs::read_to_string(root.join("Cargo.toml")).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default();
     if let Some(list) = manifest.get(kind).and_then(|v| v.as_array()) {
         names.extend(list.iter().filter_map(|t| t.get("name")?.as_str()).map(String::from));
     }
@@ -156,10 +152,7 @@ fn cargo_targets(root: &Path, kind: &str) -> Vec<String> {
 fn subdirs(dir: &Path) -> Vec<String> {
     let mut v: Vec<String> = fs::read_dir(dir)
         .map(|rd| {
-            rd.flatten()
-                .filter(|e| e.path().is_dir())
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .collect()
+            rd.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()
         })
         .unwrap_or_default();
     v.sort();
@@ -182,10 +175,7 @@ fn package_manager(root: &Path) -> &'static str {
 fn npm_scripts(root: &Path) -> Vec<String> {
     let Ok(text) = fs::read_to_string(root.join("package.json")) else { return Vec::new() };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
-    json.get("scripts")
-        .and_then(|s| s.as_object())
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default()
+    json.get("scripts").and_then(|s| s.as_object()).map(|m| m.keys().cloned().collect()).unwrap_or_default()
 }
 
 /// Explicit targets of a Makefile, skipping pattern rules, special targets and variables.
@@ -226,10 +216,7 @@ fn just_recipes(root: &Path) -> Vec<String> {
 }
 
 fn pyproject(root: &Path) -> toml::Table {
-    fs::read_to_string(root.join("pyproject.toml"))
-        .ok()
-        .and_then(|t| toml::from_str(&t).ok())
-        .unwrap_or_default()
+    fs::read_to_string(root.join("pyproject.toml")).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default()
 }
 
 pub fn python_name(root: &Path) -> Option<String> {
@@ -241,16 +228,9 @@ pub fn python_name(root: &Path) -> Option<String> {
 /// `[project.scripts]` and `[tool.poetry.scripts]` entry points.
 fn python_scripts(root: &Path) -> Vec<String> {
     let t = pyproject(root);
-    let tables = [
-        t.get("project").and_then(|p| p.get("scripts")),
-        t.get("tool").and_then(|t| t.get("poetry")?.get("scripts")),
-    ];
-    tables
-        .into_iter()
-        .flatten()
-        .filter_map(|v| v.as_table())
-        .flat_map(|m| m.keys().cloned())
-        .collect()
+    let tables =
+        [t.get("project").and_then(|p| p.get("scripts")), t.get("tool").and_then(|t| t.get("poetry")?.get("scripts"))];
+    tables.into_iter().flatten().filter_map(|v| v.as_table()).flat_map(|m| m.keys().cloned()).collect()
 }
 
 /// Prefix that runs things inside the project's environment ("uv run ", "poetry run ", or nothing).
@@ -273,7 +253,8 @@ pub fn python_plan(op: Op, root: &Path) -> Result<String, String> {
         Op::Run => {
             if let Some(s) = python_scripts(root).first() {
                 format!("{run}{}", quote_str(s))
-            } else if let Some(main) = ["main.py", "app.py", "__main__.py"].into_iter().find(|f| root.join(f).is_file()) {
+            } else if let Some(main) = ["main.py", "app.py", "__main__.py"].into_iter().find(|f| root.join(f).is_file())
+            {
                 format!("{run}{py} {main}")
             } else {
                 return Err("no script entry point or main.py — T lists the python tasks".into());

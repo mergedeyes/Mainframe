@@ -145,11 +145,10 @@ fn exec_program(text: &str) -> Option<String> {
         let t = line.trim();
         if t.starts_with('[') {
             in_entry = t == "[Desktop Entry]";
-        } else if in_entry
-            && let Some(v) = t.strip_prefix("Exec=") {
-                let (prog, _) = split_program(v);
-                return (!prog.is_empty()).then_some(prog);
-            }
+        } else if in_entry && let Some(v) = t.strip_prefix("Exec=") {
+            let (prog, _) = split_program(v);
+            return (!prog.is_empty()).then_some(prog);
+        }
     }
     None
 }
@@ -206,10 +205,7 @@ fn installed_location(file_name: &Path, bin: &str) -> Option<PathBuf> {
     dirs.iter().find_map(|d| {
         fs::read_dir(d).ok()?.flatten().map(|de| de.path()).find(|p| {
             p.extension().is_some_and(|e| e == "desktop")
-                && fs::read_to_string(p)
-                    .ok()
-                    .and_then(|t| exec_program(&t))
-                    .is_some_and(|prog| basename(&prog) == bin)
+                && fs::read_to_string(p).ok().and_then(|t| exec_program(&t)).is_some_and(|prog| basename(&prog) == bin)
         })
     })
 }

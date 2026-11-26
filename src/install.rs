@@ -166,7 +166,21 @@ fn describe(
     let shadowed_by = shadowing_copy(&name, &dest);
     let installed = installed_state(&path, size, modified, &dest);
     let stale = rel.starts_with("target/") && newest_src > modified;
-    Some(Candidate { path, name, rel, kind, triple, arch, size, modified, stale, installed, dest, shadowed_by, desktop: Vec::new() })
+    Some(Candidate {
+        path,
+        name,
+        rel,
+        kind,
+        triple,
+        arch,
+        size,
+        modified,
+        stale,
+        installed,
+        dest,
+        shadowed_by,
+        desktop: Vec::new(),
+    })
 }
 
 /// `target/release/foo` → ("release", None)
@@ -208,12 +222,14 @@ fn shadowing_copy(name: &str, dest: &Path) -> Option<PathBuf> {
 /// put it there (keeps cargo's records straight), plain `rm` otherwise.
 pub fn removal_cmd(path: &Path, name: &str) -> String {
     let q = crate::project::quote;
-    let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| crate::config::home().join(".cargo"));
+    let cargo_home =
+        std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| crate::config::home().join(".cargo"));
     if path.parent() == Some(&cargo_home.join("bin"))
-        && let Some(pkg) = cargo_owner(&cargo_home, name) {
-            let qs = crate::project::quote_str;
-            return format!("cargo uninstall {} --bin {}", qs(&pkg), qs(name));
-        }
+        && let Some(pkg) = cargo_owner(&cargo_home, name)
+    {
+        let qs = crate::project::quote_str;
+        return format!("cargo uninstall {} --bin {}", qs(&pkg), qs(name));
+    }
     format!("rm -- {}", q(path))
 }
 
@@ -270,7 +286,13 @@ fn elf_summary(path: &Path, head: &[u8]) -> Option<String> {
         0x3E => "x86_64",
         0x28 => "arm",
         0xB7 => "aarch64",
-        0xF3 => if is64 { "riscv64" } else { "riscv32" },
+        0xF3 => {
+            if is64 {
+                "riscv64"
+            } else {
+                "riscv32"
+            }
+        }
         0x08 => "mips",
         0x14 => "ppc",
         0x15 => "ppc64",

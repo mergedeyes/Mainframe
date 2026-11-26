@@ -64,7 +64,10 @@ pub enum Mode {
         /// Walking the `:` history: the entry shown and what was typed before.
         browsing: Option<(Option<usize>, String)>,
     },
-    Confirm { msg: String, action: Confirmed },
+    Confirm {
+        msg: String,
+        action: Confirmed,
+    },
     Help,
     GitMenu,
     Install(InstallPicker),
@@ -121,13 +124,16 @@ pub enum Confirmed {
     /// Bring the CLAUDE.md preset into this project.
     Preset(PathBuf),
     /// `git worktree remove` (the worktree, the main one to go to if you're inside it, --force).
-    RemoveWorktree { path: PathBuf, main: PathBuf, force: bool },
+    RemoveWorktree {
+        path: PathBuf,
+        main: PathBuf,
+        force: bool,
+    },
     /// Put a deploy target's newest backup back (target, project root).
     Rollback(Box<Deploy>, PathBuf),
     /// Delete a deploy target from the settings (name, index, project root).
     RemoveDeploy(String, usize, PathBuf),
 }
-
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -152,7 +158,6 @@ pub struct Foreground {
     /// Capture stdout (the tty stays free for pickers like fzf) and cd to it.
     pub cd_to_output: bool,
 }
-
 
 pub struct App {
     pub config: Config,
@@ -284,9 +289,10 @@ impl App {
             self.request_git();
         }
         if let Some((_, _, at)) = &self.status
-            && at.elapsed() > Duration::from_secs(6) {
-                self.status = None;
-            }
+            && at.elapsed() > Duration::from_secs(6)
+        {
+            self.status = None;
+        }
         self.refresh();
     }
 
@@ -318,9 +324,7 @@ impl App {
         self.sel_key = Some(sel);
         self.update_preview();
         let entry = self.browser.selected().cloned();
-        self.run_hint = project::plan(Op::Run, entry.as_ref(), &self.browser.cwd, &self.config)
-            .ok()
-            .map(|p| p.cmd);
+        self.run_hint = project::plan(Op::Run, entry.as_ref(), &self.browser.cwd, &self.config).ok().map(|p| p.cmd);
     }
 
     /// Notices changes made elsewhere: reloads the file list when this directory changed,
@@ -586,7 +590,8 @@ impl App {
                 self.diff_preview = !self.diff_preview;
                 self.show_preview = true;
                 self.update_preview();
-                let msg = if self.diff_preview { "modified files preview as diff" } else { "preview shows file contents" };
+                let msg =
+                    if self.diff_preview { "modified files preview as diff" } else { "preview shows file contents" };
                 self.set_status(msg, Level::Info);
             }
             KeyCode::Char('w') => {

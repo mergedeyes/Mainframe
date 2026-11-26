@@ -144,7 +144,8 @@ fn sgr(style: Style) -> String {
 
 fn color_code(color: Color, bg: bool) -> Option<String> {
     let base = if bg { 10 } else { 0 };
-    let basic = [Color::Black, Color::Red, Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Gray];
+    let basic =
+        [Color::Black, Color::Red, Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Gray];
     let bright = [
         Color::DarkGray,
         Color::LightRed,
@@ -179,16 +180,8 @@ fn extended(it: &mut impl Iterator<Item = u16>) -> Option<Color> {
 }
 
 fn basic(n: u16) -> Color {
-    [
-        Color::Black,
-        Color::Red,
-        Color::Green,
-        Color::Yellow,
-        Color::Blue,
-        Color::Magenta,
-        Color::Cyan,
-        Color::Gray,
-    ][n as usize]
+    [Color::Black, Color::Red, Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Gray]
+        [n as usize]
 }
 
 fn bright(n: u16) -> Color {
@@ -223,7 +216,8 @@ mod tests {
 
     #[test]
     fn encodes_what_it_parses() {
-        let raw = "\x1b[1;92mFinished\x1b[0m plain \x1b[38;5;208mindexed\x1b[48;2;1;2;3m rgb bg\x1b[0m \x1b[2;9;3mdim\x1b[0m";
+        let raw =
+            "\x1b[1;92mFinished\x1b[0m plain \x1b[38;5;208mindexed\x1b[48;2;1;2;3m rgb bg\x1b[0m \x1b[2;9;3mdim\x1b[0m";
         let line = parse_line(raw);
         assert_eq!(parse_line(&encode_line(&line)), line);
         // Unstyled lines stay plain text.

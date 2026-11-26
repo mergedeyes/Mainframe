@@ -150,9 +150,7 @@ pub fn key_matches(spec: &str, key: &KeyEvent) -> bool {
 
 impl Config {
     pub fn path() -> PathBuf {
-        let base = env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home().join(".config"));
+        let base = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".config"));
         base.join("mainframe").join("config.toml")
     }
 
@@ -179,18 +177,12 @@ pub fn home() -> PathBuf {
 
 /// `$XDG_STATE_HOME/mainframe`: history and saved output.
 pub fn state_dir() -> PathBuf {
-    env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".local/state"))
-        .join("mainframe")
+    env::var_os("XDG_STATE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/state")).join("mainframe")
 }
 
 /// `$XDG_CACHE_HOME/mainframe`: things that can be thrown away, like deploy build checkouts.
 pub fn cache_dir() -> PathBuf {
-    env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".cache"))
-        .join("mainframe")
+    env::var_os("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".cache")).join("mainframe")
 }
 
 /// A file name for things kept per project, e.g. `~/Projekte/Games/bash_emu` →

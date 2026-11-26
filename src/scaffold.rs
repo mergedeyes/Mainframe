@@ -13,8 +13,8 @@ use std::{
 
 use crate::{
     config::{self, Config},
-    project::Kind,
     form::Form,
+    project::Kind,
 };
 
 /// The stacks the form offers, as written in the template's `<!-- if … -->` markers.
@@ -145,7 +145,10 @@ pub const PENDING: &str = ".claude/rules/mainframe-preset.md";
 
 /// The files Claude Code reads a project's instructions from, those `dir` has.
 pub fn instruction_files(dir: &Path) -> Vec<&'static str> {
-    ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"].into_iter().filter(|f| dir.join(f).is_file()).collect()
+    ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"]
+        .into_iter()
+        .filter(|f| dir.join(f).is_file())
+        .collect()
 }
 
 /// The template's stacks for the build tools at `dir`; "none" when it has none of them.
@@ -185,7 +188,8 @@ pub fn apply_preset(dir: &Path, preset: &str) -> Result<Preset, String> {
     }
     let path = dir.join(PENDING);
     let again = path.exists();
-    let written = path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&path, merge_note(preset, &existing)));
+    let written =
+        path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&path, merge_note(preset, &existing)));
     written.map_err(|e| format!("can't write {PENDING}: {e}"))?;
     exclude_here(dir, PENDING).map_err(|e| format!("wrote {PENDING}, but can't exclude it from git: {e}"))?;
     Ok(Preset::Pending(again))
@@ -239,7 +243,10 @@ fn exclude_here(dir: &Path, rel: &str) -> std::io::Result<()> {
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
     };
-    let (Some(file), Some(prefix)) = (git(&["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"]), git(&["rev-parse", "--show-prefix"])) else {
+    let (Some(file), Some(prefix)) = (
+        git(&["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"]),
+        git(&["rev-parse", "--show-prefix"]),
+    ) else {
         return Ok(());
     };
     append_line(Path::new(&file), &format!("/{prefix}{rel}"))
@@ -379,7 +386,11 @@ mod tests {
     }
 
     fn status(dir: &Path) -> String {
-        let out = Command::new("git").args(["status", "--porcelain", "--untracked-files=all"]).current_dir(dir).output().unwrap();
+        let out = Command::new("git")
+            .args(["status", "--porcelain", "--untracked-files=all"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
         String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
@@ -404,7 +415,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("CLAUDE.md"), "# app\nmine\n").unwrap();
         Command::new("git").args(["add", "."]).current_dir(&top).output().unwrap();
-        Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]).current_dir(&top).output().unwrap();
+        Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"])
+            .current_dir(&top)
+            .output()
+            .unwrap();
 
         let first = apply_preset(&dir, "# preset\n- a rule\n");
         let second = apply_preset(&dir, "# preset\n- a rule\n");

@@ -39,7 +39,13 @@ impl Item {
         Item { place: None, root: root.to_path_buf(), label: label.into(), note, paths, cmd: None, size: None }
     }
 
-    fn tool(root: &Path, label: impl Into<String>, note: &'static str, paths: Vec<PathBuf>, cmd: impl Into<String>) -> Self {
+    fn tool(
+        root: &Path,
+        label: impl Into<String>,
+        note: &'static str,
+        paths: Vec<PathBuf>,
+        cmd: impl Into<String>,
+    ) -> Self {
         Item { cmd: Some(cmd.into()), ..Item::dirs(root, label, note, paths) }
     }
 
@@ -291,11 +297,8 @@ const PYTHON: &[(&str, &str)] = &[
     ("dist", "built wheels and sdists"),
 ];
 
-const ZIG: &[(&str, &str)] = &[
-    ("zig-out", "build output"),
-    (".zig-cache", "build cache"),
-    ("zig-cache", "build cache"),
-];
+const ZIG: &[(&str, &str)] =
+    &[("zig-out", "build output"), (".zig-cache", "build cache"), ("zig-cache", "build cache")];
 
 const NATIVE: &[(&str, &str)] = &[
     ("build", "debug build tree — b configures it again"),
@@ -324,7 +327,8 @@ pub fn scan(root: &Path) -> Vec<Item> {
 }
 
 /// Folders never walked into for nested projects: huge, and nothing in them is ours.
-const SKIP: &[&str] = &["node_modules", "target", "vendor", "venv", "site-packages", "__pycache__", "bower_components", "Pods"];
+const SKIP: &[&str] =
+    &["node_modules", "target", "vendor", "venv", "site-packages", "__pycache__", "bower_components", "Pods"];
 
 /// How far and how much the walk for nested projects goes, so a huge tree can't stall it.
 const MAX_DEPTH: usize = 8;
@@ -358,8 +362,7 @@ fn scan_tree(root: &Path, place: Option<&str>, shared: bool, skip: &HashSet<Path
             .filter(|e| {
                 let name = e.file_name();
                 let name = name.to_string_lossy();
-                !name.starts_with('.') && !SKIP.contains(&name.as_ref())
-                    || e.path().join("CACHEDIR.TAG").is_file()
+                !name.starts_with('.') && !SKIP.contains(&name.as_ref()) || e.path().join("CACHEDIR.TAG").is_file()
             })
             .map(|e| e.path())
             .collect();
@@ -377,7 +380,12 @@ fn scan_tree(root: &Path, place: Option<&str>, shared: bool, skip: &HashSet<Path
             if sub.join("CACHEDIR.TAG").is_file() {
                 let parent = rel.parent().unwrap_or(Path::new(""));
                 let name = rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                let mut item = Item::dirs(&sub, name, "marked as a cache folder — the tool that made it builds it again", vec![sub.clone()]);
+                let mut item = Item::dirs(
+                    &sub,
+                    name,
+                    "marked as a cache folder — the tool that made it builds it again",
+                    vec![sub.clone()],
+                );
                 item.place = at(parent);
                 item.root = root.join(parent);
                 item.size = Some(measure(&item.paths));
@@ -526,7 +534,13 @@ fn find_pycache(dir: &Path, out: &mut Vec<PathBuf>, budget: &mut usize) {
 fn go_cache(root: &Path, items: &mut Vec<Item>) {
     let Some(dir) = command_output("go", &["env", "GOCACHE"], Path::new("/")).map(PathBuf::from) else { return };
     if dir.is_dir() {
-        items.push(Item::tool(root, "go build cache", "shared by all Go projects — rebuilt as needed", vec![dir], "go clean -cache"));
+        items.push(Item::tool(
+            root,
+            "go build cache",
+            "shared by all Go projects — rebuilt as needed",
+            vec![dir],
+            "go clean -cache",
+        ));
     }
 }
 
@@ -559,7 +573,10 @@ fn cargo(root: &Path, items: &mut Vec<Item>) {
     for name in order {
         let paths = profiles.remove(&name).unwrap_or_default();
         let (label, note) = match name.as_str() {
-            "debug" => ("debug builds".to_string(), "cargo build / run / test / check output — the next build compiles everything again"),
+            "debug" => (
+                "debug builds".to_string(),
+                "cargo build / run / test / check output — the next build compiles everything again",
+            ),
             "release" => ("release builds".to_string(), "cargo build --release output — installed copies stay"),
             _ => (format!("{name} builds"), "output of a custom profile"),
         };
@@ -577,7 +594,13 @@ fn cargo(root: &Path, items: &mut Vec<Item>) {
     if doc.is_dir() {
         items.push(Item::dirs(root, "docs", "cargo doc output", vec![doc]));
     }
-    items.push(Item::tool(root, "all of target", "cargo clean — everything cargo built for this project", vec![target], "cargo clean"));
+    items.push(Item::tool(
+        root,
+        "all of target",
+        "cargo clean — everything cargo built for this project",
+        vec![target],
+        "cargo clean",
+    ));
 }
 
 fn is_profile_dir(p: &Path) -> bool {
@@ -624,7 +647,12 @@ fn drop_tracked(root: &Path, items: &mut Vec<Item>) {
     if !out.status.success() {
         return;
     }
-    let tracked: Vec<PathBuf> = out.stdout.split(|&b| b == 0).filter(|s| !s.is_empty()).map(|s| root.join(String::from_utf8_lossy(s).as_ref())).collect();
+    let tracked: Vec<PathBuf> = out
+        .stdout
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| root.join(String::from_utf8_lossy(s).as_ref()))
+        .collect();
     for item in items.iter_mut().filter(|i| i.cmd.is_none()) {
         item.paths.retain(|p| !tracked.iter().any(|t| t.starts_with(p)));
     }
@@ -682,7 +710,15 @@ mod tests {
     fn offers_output_but_not_tracked_folders() {
         let root = std::env::temp_dir().join(format!("mainframe-cleanup-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        for d in ["node_modules/x", "dist", "build", "src/__pycache__", "tools/web/node_modules", "old/target", ".hidden/p/node_modules"] {
+        for d in [
+            "node_modules/x",
+            "dist",
+            "build",
+            "src/__pycache__",
+            "tools/web/node_modules",
+            "old/target",
+            ".hidden/p/node_modules",
+        ] {
             fs::create_dir_all(root.join(d)).unwrap();
         }
         fs::write(root.join("package.json"), r#"{"scripts":{"clean":"rm -rf dist"}}"#).unwrap();
@@ -770,7 +806,9 @@ mod usage_tests {
     /// Only meaningful on a compressed btrfs (like the dev machine); skipped elsewhere.
     #[test]
     fn compressed_files_measure_smaller_on_disk() {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("measure-test-{}", std::process::id()));
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("measure-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         if !is_btrfs(&dir) {
             fs::remove_dir_all(&dir).unwrap();

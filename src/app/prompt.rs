@@ -162,10 +162,12 @@ impl App {
             }
             PromptKind::Rename(from) => {
                 let mut to = self.resolve(&input);
-                if to.is_dir() && !from.is_dir()
-                    && let Some(name) = from.file_name() {
-                        to = to.join(name);
-                    }
+                if to.is_dir()
+                    && !from.is_dir()
+                    && let Some(name) = from.file_name()
+                {
+                    to = to.join(name);
+                }
                 match move_path(&from, &to) {
                     Ok(()) => {
                         self.set_status(format!("→ {}", config::pretty_path(&to)), Level::Ok);
