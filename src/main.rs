@@ -4,6 +4,7 @@ mod browser;
 mod cleanup;
 mod complete;
 mod config;
+mod deploy;
 mod desktop;
 mod filter_list;
 mod form;

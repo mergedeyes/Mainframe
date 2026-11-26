@@ -13,12 +13,14 @@ use ratatui::{
 
 use super::{App, Confirmed, Level, Mode};
 use crate::{
-    config, filter_list,
+    config,
+    deploy::{self, Deploy},
+    filter_list,
     form::{Field, Form, FormKind},
     install,
     line::LineEdit,
     project::{self, Kind, Op, Plan, quote},
-    settings::{self, Deploy, ProjectSettings},
+    settings::{self, ProjectSettings},
 };
 
 pub struct DeployPicker {
@@ -165,7 +167,7 @@ impl App {
             Run::Rollback => (d.rollback_script(), "rollback", format!("roll back {}", d.name)),
             Run::Backups => (d.backups_script(), "backups", format!("backups on {}", d.name)),
         };
-        let file = settings::script_file(root, &d.name, tag);
+        let file = deploy::script_file(root, &d.name, tag);
         let written = file.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&file, script));
         if let Err(e) = written {
             return self.set_status(format!("can't write {}: {e}", config::pretty_path(&file)), Level::Err);
