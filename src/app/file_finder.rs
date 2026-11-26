@@ -3,7 +3,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -74,16 +73,9 @@ impl App {
 /// usual build and dependency folders.
 fn list_files(root: &Path, git: bool) -> Vec<String> {
     if git {
-        let out = Command::new("git")
-            .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
-            .current_dir(root)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
-        if let Ok(out) = out
-            && out.status.success()
-        {
-            let mut files: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        let args = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
+        if let Some(out) = crate::git::git(root, &args) {
+            let mut files: Vec<String> = String::from_utf8_lossy(&out)
                 .split('\0')
                 .filter(|f| !f.is_empty() && root.join(f).exists())
                 .take(MAX_FILES)

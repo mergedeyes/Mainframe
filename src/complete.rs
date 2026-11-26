@@ -5,10 +5,11 @@ use std::{
     env, fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use crate::config::{expand_tilde, pretty_path};
+use crate::proc;
 
 const MAX_ITEMS: usize = 500;
 
@@ -225,19 +226,10 @@ fn smart_case(pattern: &str) -> fn(&str) -> String {
 }
 
 fn zoxide(input: &str, exclude: &Path) -> Vec<Item> {
-    let Ok(out) = Command::new("zoxide")
-        .args(["query", "--list", "--exclude"])
-        .arg(exclude)
-        .arg("--")
-        .args(input.split_whitespace())
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
-        return Vec::new();
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
+    let mut cmd = Command::new("zoxide");
+    cmd.args(["query", "--list", "--exclude"]).arg(exclude).arg("--").args(input.split_whitespace());
+    let Some(out) = proc::text(&mut cmd) else { return Vec::new() };
+    out.lines()
         .take(30)
         .map(|l| {
             let p = PathBuf::from(l);

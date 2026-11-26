@@ -232,17 +232,7 @@ Don't commit anything for this unless the user asks.
 /// `git status`. Works from a subfolder of the repo and in linked worktrees; outside a
 /// repo there's nothing to do.
 fn exclude_here(dir: &Path, rel: &str) -> std::io::Result<()> {
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
+    let git = |args: &[&str]| crate::git::git_text(dir, args);
     let (Some(file), Some(prefix)) = (
         git(&["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"]),
         git(&["rev-parse", "--show-prefix"]),

@@ -3,13 +3,14 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use ratatui::style::Color;
 
 use crate::{
     form::{Field, Form, FormKind},
+    proc,
     project::quote_str,
 };
 
@@ -69,9 +70,12 @@ impl GitInfo {
 
 /// stdout of a successful `git` run in `cwd`.
 pub fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out =
-        Command::new("git").args(args).current_dir(cwd).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-    out.status.success().then_some(out.stdout)
+    proc::output(Command::new("git").args(args).current_dir(cwd))
+}
+
+/// [`git`] as text, trimmed.
+pub fn git_text(cwd: &Path, args: &[&str]) -> Option<String> {
+    proc::text(Command::new("git").args(args).current_dir(cwd))
 }
 
 /// Staged and unstaged changes to one file, without the `diff --git` header.
@@ -210,9 +214,7 @@ pub fn push_branch_cmd(cwd: &Path, branch: &str) -> Result<String, String> {
     if git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_none() {
         return Err(format!("no local branch {branch}"));
     }
-    let config = |key: &str| {
-        git(cwd, &["config", &format!("branch.{branch}.{key}")]).map(|o| String::from_utf8_lossy(&o).trim().to_string())
-    };
+    let config = |key: &str| git_text(cwd, &["config", &format!("branch.{branch}.{key}")]);
     let b = quote_str(branch);
     Ok(match (config("remote"), config("merge")) {
         // "." tracks a local branch; pushing there would only move that branch.
@@ -373,7 +375,7 @@ fn count(track: &str, what: &str) -> u32 {
 /// The checked-out branch, the remote branch it tracks and how many of its commits it
 /// doesn't have yet, when there are any. As of the last fetch: git doesn't know newer ones.
 pub fn behind_upstream(dir: &Path) -> Option<(String, String, usize)> {
-    let out = |args: &[&str]| git(dir, args).map(|o| String::from_utf8_lossy(&o).trim().to_string());
+    let out = |args: &[&str]| git_text(dir, args);
     let upstream = out(&["rev-parse", "--abbrev-ref", "@{upstream}"])?;
     let behind: usize = out(&["rev-list", "--count", "HEAD..@{upstream}"])?.parse().ok()?;
     let branch = out(&["branch", "--show-current"])?;
@@ -460,15 +462,7 @@ pub fn gh_repo_form(source: &Path) -> Result<Form, String> {
     if crate::project::which("gh").is_none() {
         return Err("gh (GitHub CLI) is not installed".into());
     }
-    let owner = Command::new("gh")
-        .args(["api", "user", "--jq", ".login"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    let Some(owner) = owner else {
+    let Some(owner) = proc::text(Command::new("gh").args(["api", "user", "--jq", ".login"])) else {
         return Err("gh isn't logged in — run `gh auth login` (e.g. via !)".into());
     };
 

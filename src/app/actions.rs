@@ -12,7 +12,7 @@ use super::{App, Foreground, Level};
 use crate::{
     browser,
     config::{self, Action, Config},
-    locate,
+    locate, proc,
     project::{self, Op, Plan, quote, quote_str},
 };
 
@@ -206,17 +206,9 @@ impl App {
         if !self.zoxide {
             return None;
         }
-        let out = Command::new("zoxide")
-            .args(["query", "--exclude"])
-            .arg(&self.browser.cwd)
-            .arg("--")
-            .args(input.split_whitespace())
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())?;
-        let dir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        let mut cmd = Command::new("zoxide");
+        cmd.args(["query", "--exclude"]).arg(&self.browser.cwd).arg("--").args(input.split_whitespace());
+        let dir = PathBuf::from(proc::text(&mut cmd)?);
         dir.is_dir().then_some(dir)
     }
 

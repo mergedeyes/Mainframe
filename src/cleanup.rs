@@ -9,11 +9,12 @@ use std::{
         unix::fs::{FileExt, MetadataExt},
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use crate::{
     browser::human_size,
+    proc,
     project::{self, Kind, Project, quote, quote_str, which},
     targets,
 };
@@ -617,9 +618,7 @@ fn cargo_target_dir(root: &Path) -> PathBuf {
 
 fn command_output(program: &str, args: &[&str], cwd: &Path) -> Option<String> {
     which(program)?;
-    let out = Command::new(program).args(args).current_dir(cwd).stderr(Stdio::null()).output().ok()?;
-    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    (out.status.success() && !s.is_empty()).then_some(s)
+    proc::text(Command::new(program).args(args).current_dir(cwd)).filter(|s| !s.is_empty())
 }
 
 /// Removes every path git tracks something in: a `build/` with sources in it isn't output.
@@ -634,21 +633,11 @@ fn drop_tracked(root: &Path, items: &mut Vec<Item>) {
     if inside.is_empty() {
         return;
     }
-    let Ok(out) = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "-z", "--"])
-        .args(&inside)
-        .stderr(Stdio::null())
-        .output()
+    let Some(out) = proc::output(Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--"]).args(&inside))
     else {
         return;
     };
-    if !out.status.success() {
-        return;
-    }
     let tracked: Vec<PathBuf> = out
-        .stdout
         .split(|&b| b == 0)
         .filter(|s| !s.is_empty())
         .map(|s| root.join(String::from_utf8_lossy(s).as_ref()))

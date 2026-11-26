@@ -6,12 +6,13 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use crate::{
     form::{Field, Form, FormKind},
     git::git,
+    proc,
     project::{quote_str, which},
 };
 
@@ -244,8 +245,7 @@ fn pr_workflow(root: &Path) -> Option<String> {
 }
 
 fn gh(args: &[&str]) -> Option<String> {
-    let out = Command::new("gh").args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    proc::text(Command::new("gh").args(args))
 }
 
 /// What GitHub requires before a merge into `main` (branch protection and rulesets), as

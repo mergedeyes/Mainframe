@@ -14,6 +14,7 @@ mod install;
 mod line;
 mod locate;
 mod notes;
+mod proc;
 mod project;
 mod projects;
 mod release;
