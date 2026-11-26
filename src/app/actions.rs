@@ -80,10 +80,8 @@ impl App {
     pub(super) fn edit_config(&mut self) {
         let path = Config::path();
         if !path.exists() {
-            let created = path
-                .parent()
-                .map_or(Ok(()), fs::create_dir_all)
-                .and_then(|_| fs::write(&path, config::TEMPLATE));
+            let created =
+                path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&path, config::TEMPLATE));
             if let Err(e) = created {
                 self.set_status(format!("can't create {}: {e}", path.display()), Level::Err);
                 return;
@@ -131,7 +129,8 @@ impl App {
     }
 
     pub(super) fn foreground(&mut self, plan: Plan, wait: bool) {
-        self.pending = Some(Foreground { cmd: plan.cmd, cwd: plan.cwd, wait, then_reload_config: false, cd_to_output: false });
+        self.pending =
+            Some(Foreground { cmd: plan.cmd, cwd: plan.cwd, wait, then_reload_config: false, cd_to_output: false });
     }
 
     pub(super) fn custom_action(&mut self, action: &Action) {

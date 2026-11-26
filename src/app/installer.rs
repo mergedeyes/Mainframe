@@ -64,7 +64,6 @@ pub enum AfterReview {
     Nothing,
 }
 
-
 impl App {
     pub(super) fn open_install_picker(&mut self) {
         let start = match self.browser.selected() {
@@ -137,7 +136,11 @@ impl App {
                 };
                 let cmd = install::removal_cmd(&shadow, &c.name);
                 self.mode = Mode::Confirm {
-                    msg: format!("Remove {} so {} runs? ({cmd}) [y/N]", config::pretty_path(&shadow), config::pretty_path(&c.dest)),
+                    msg: format!(
+                        "Remove {} so {} runs? ({cmd}) [y/N]",
+                        config::pretty_path(&shadow),
+                        config::pretty_path(&c.dest)
+                    ),
                     action: Confirmed::Task(Plan { cmd, cwd: self.browser.cwd.clone() }),
                 };
             }

@@ -172,7 +172,11 @@ impl App {
             title: " new project ".into(),
             fields: vec![
                 Field::text("name", "", "folder name"),
-                Field::dir("location", config::pretty_path(root), "Tab completes · a group folder like Games/ works too"),
+                Field::dir(
+                    "location",
+                    config::pretty_path(root),
+                    "Tab completes · a group folder like Games/ works too",
+                ),
                 Field::choice("stack", scaffold::STACKS, 0, "picks the checks in CLAUDE.md"),
                 Field::choice("CLAUDE.md", &["yes", "no"], 0, "local only, listed in .git/info/exclude"),
             ],
@@ -193,8 +197,8 @@ impl App {
                 return false;
             }
         };
-        let claude_md = (form.get("CLAUDE.md") == "yes")
-            .then(|| scaffold::render(&scaffold::template(), name, form.get("stack")));
+        let claude_md =
+            (form.get("CLAUDE.md") == "yes").then(|| scaffold::render(&scaffold::template(), name, form.get("stack")));
         let res = scaffold::create(&dir, claude_md.as_deref());
         // The folder exists even when a later step failed; going there shows what's in it.
         if dir.is_dir() {
@@ -216,10 +220,8 @@ impl App {
     pub(super) fn edit_claude_template(&mut self) {
         let path = scaffold::template_path();
         if !path.exists() {
-            let created = path
-                .parent()
-                .map_or(Ok(()), fs::create_dir_all)
-                .and_then(|_| fs::write(&path, scaffold::CLAUDE_MD));
+            let created =
+                path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&path, scaffold::CLAUDE_MD));
             if let Err(e) = created {
                 return self.set_status(format!("can't create {}: {e}", path.display()), Level::Err);
             }

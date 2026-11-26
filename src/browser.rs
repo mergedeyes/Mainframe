@@ -104,12 +104,9 @@ impl Browser {
                     // Follow symlinks for dir/exec detection.
                     let meta = fs::metadata(&path).or_else(|_| de.metadata());
                     let (is_dir, is_exec, size, modified) = match meta {
-                        Ok(m) => (
-                            m.is_dir(),
-                            m.is_file() && m.permissions().mode() & 0o111 != 0,
-                            m.len(),
-                            m.modified().ok(),
-                        ),
+                        Ok(m) => {
+                            (m.is_dir(), m.is_file() && m.permissions().mode() & 0o111 != 0, m.len(), m.modified().ok())
+                        }
                         Err(_) => (false, false, 0, None),
                     };
                     self.entries.push(Entry { name, path, is_dir, is_exec, is_symlink, size, modified });
@@ -140,18 +137,11 @@ impl Browser {
             .filter(|&i| needle.is_empty() || self.entries[i].name.to_lowercase().contains(&needle))
             .collect();
         let sel = self.state.selected().unwrap_or(0);
-        self.state.select(if self.visible.is_empty() {
-            None
-        } else {
-            Some(sel.min(self.visible.len() - 1))
-        });
+        self.state.select(if self.visible.is_empty() { None } else { Some(sel.min(self.visible.len() - 1)) });
     }
 
     pub fn selected(&self) -> Option<&Entry> {
-        self.state
-            .selected()
-            .and_then(|i| self.visible.get(i))
-            .map(|&i| &self.entries[i])
+        self.state.selected().and_then(|i| self.visible.get(i)).map(|&i| &self.entries[i])
     }
 
     /// Space: marks or unmarks the selection and moves on.
@@ -242,21 +232,14 @@ pub fn preview(entry: &Entry, show_hidden: bool) -> Preview {
     let mut buf = Vec::with_capacity(PREVIEW_BYTES.min(entry.size as usize));
     match fs::File::open(&entry.path).and_then(|f| f.take(PREVIEW_BYTES as u64).read_to_end(&mut buf)) {
         Ok(_) if looks_binary(&buf) => Preview::Binary(entry.size),
-        Ok(_) => Preview::Text(
-            String::from_utf8_lossy(&buf)
-                .lines()
-                .map(|l| l.replace('\t', "    "))
-                .collect(),
-        ),
+        Ok(_) => Preview::Text(String::from_utf8_lossy(&buf).lines().map(|l| l.replace('\t', "    ")).collect()),
         Err(e) => Preview::Error(e.to_string()),
     }
 }
 
 pub fn is_binary(path: &Path) -> bool {
     let mut buf = [0u8; 8192];
-    fs::File::open(path)
-        .and_then(|mut f| f.read(&mut buf))
-        .is_ok_and(|n| looks_binary(&buf[..n]))
+    fs::File::open(path).and_then(|mut f| f.read(&mut buf)).is_ok_and(|n| looks_binary(&buf[..n]))
 }
 
 fn looks_binary(buf: &[u8]) -> bool {

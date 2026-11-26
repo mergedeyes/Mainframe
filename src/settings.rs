@@ -192,7 +192,10 @@ fn with_deploy(text: &str, idx: usize, d: Option<&Deploy>) -> Option<String> {
     let start = *starts.get(idx)?;
     let mut end = (start + 1..lines.len()).find(|&i| header(lines[i])).unwrap_or(lines.len());
     // Comments and blank lines just above the next table belong to that one.
-    while end > start + 1 && { let t = lines[end - 1].trim(); t.is_empty() || t.starts_with('#') } {
+    while end > start + 1 && {
+        let t = lines[end - 1].trim();
+        t.is_empty() || t.starts_with('#')
+    } {
         end -= 1;
     }
     let mut out: String = lines[..start].concat();
@@ -230,7 +233,12 @@ fn render_deploy(d: &Deploy) -> String {
     }
     out += &format!("artifact = {}\n", s(&d.artifact));
     out += &format!("sudo = {}\n", d.sudo);
-    for (k, v, dv) in [("service", &d.service, &def.service), ("restart", &d.restart, &def.restart), ("ssh", &d.ssh, &def.ssh), ("key", &d.key, &def.key)] {
+    for (k, v, dv) in [
+        ("service", &d.service, &def.service),
+        ("restart", &d.restart, &def.restart),
+        ("ssh", &d.ssh, &def.ssh),
+        ("key", &d.key, &def.key),
+    ] {
         if v != dv {
             out += &format!("{k} = {}\n", s(v));
         }
@@ -276,7 +284,8 @@ impl Deploy {
 
     /// Where a `from` build happens: one checkout per project and target.
     pub fn build_dir(&self, root: &Path) -> PathBuf {
-        let safe: String = self.name.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect();
+        let safe: String =
+            self.name.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect();
         config::cache_dir().join("deploy").join(format!("{}--{safe}", path_key(root)))
     }
 
@@ -301,7 +310,8 @@ impl Deploy {
             steps.push(self.build.trim().to_string());
         }
         let artifact = self.artifact_path(root);
-        let mut shown = artifact.strip_prefix(root).map_or_else(|_| config::pretty_path(&artifact), |r| r.display().to_string());
+        let mut shown =
+            artifact.strip_prefix(root).map_or_else(|_| config::pretty_path(&artifact), |r| r.display().to_string());
         if !from.is_empty() {
             shown = format!("{shown} (of {from})");
         }
@@ -389,11 +399,7 @@ impl Deploy {
     }
 
     fn hint_sudo(&self) -> &'static str {
-        if self.sudo && !self.interactive {
-            " (sudo without password? else set interactive = true)"
-        } else {
-            ""
-        }
+        if self.sudo && !self.interactive { " (sudo without password? else set interactive = true)" } else { "" }
     }
 
     /// The whole deploy as a shell script, run from the project root.
@@ -458,9 +464,13 @@ echo "✔ replaced $dst"
         let build = self.build.trim();
         if !build.is_empty() {
             let hide = if runs_cross(build) { HIDE_CARGO_CONFIG } else { "" };
-            out += &format!("step {}\n(\n{hide}{build}\n) || fail 'build failed — nothing was copied'\n", quote_str(&format!("build · {build}")));
+            out += &format!(
+                "step {}\n(\n{hide}{build}\n) || fail 'build failed — nothing was copied'\n",
+                quote_str(&format!("build · {build}"))
+            );
         }
-        out += &format!("a={artifact}\n[ -f \"$a\" ] || fail \"no file at $a — check artifact in the deploy settings\"\n");
+        out +=
+            &format!("a={artifact}\n[ -f \"$a\" ] || fail \"no file at $a — check artifact in the deploy settings\"\n");
         out += &format!("step \"copy $(du -h \"$a\" | cut -f1) → \"{}\n", quote_str(self.host.trim()));
         out += &format!("{} < \"$a\" || fail {}\n", self.remote(&upload, false), quote_str(self.hint_ssh()));
         out += &format!("step {}\n", quote_str(&format!("swap in {}", self.remote_path)));
@@ -528,7 +538,11 @@ echo "$(ls -1d "$dst".bak-* 2>/dev/null | wc -l) older backup(s) left"
         );
         let mut out = String::from(PRELUDE);
         out += &format!("step {}\n", quote_str(&format!("roll back {} on {}", self.remote_path, self.host.trim())));
-        out += &format!("{} || fail {}\n", self.remote(&restore, true), quote_str(&format!("roll back failed{}", self.hint_sudo())));
+        out += &format!(
+            "{} || fail {}\n",
+            self.remote(&restore, true),
+            quote_str(&format!("roll back failed{}", self.hint_sudo()))
+        );
         self.push_restart(&mut out, "the backup is back in place");
         out
     }
@@ -556,7 +570,8 @@ echo "$(ls -1d "$dst".bak-* 2>/dev/null | wc -l) older backup(s) left"
             return;
         }
         *out += &format!("step {}\n", quote_str(&format!("restart · {restart}")));
-        *out += &format!("{} || fail {}\n", self.remote(restart, true), quote_str(&format!("restart failed — {after}")));
+        *out +=
+            &format!("{} || fail {}\n", self.remote(restart, true), quote_str(&format!("restart failed — {after}")));
     }
 }
 
@@ -585,7 +600,11 @@ impl Deploy {
             "WantedBy=$wanted".into(),
         ];
         // $wanted is filled in by the remote shell; everything else is literal.
-        let unit_text = lines.iter().map(|l| if l.contains("$wanted") { format!("\"{l}\"") } else { quote_str(l) }).collect::<Vec<_>>().join(" ");
+        let unit_text = lines
+            .iter()
+            .map(|l| if l.contains("$wanted") { format!("\"{l}\"") } else { quote_str(l) })
+            .collect::<Vec<_>>()
+            .join(" ");
         format!(
             r#"set -e
 svc={svc}
@@ -636,7 +655,8 @@ fn runs_cross(build: &str) -> bool {
 /// Where the script for a run is written, so the output pane shows a short command and
 /// you can read exactly what ran.
 pub fn script_file(root: &Path, name: &str, what: &str) -> PathBuf {
-    let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect();
+    let safe: String =
+        name.chars().map(|c| if c.is_ascii_alphanumeric() || "-_.".contains(c) { c } else { '-' }).collect();
     config::state_dir().join("deploy").join(format!("{}--{safe}-{what}.sh", path_key(root)))
 }
 
@@ -661,7 +681,8 @@ mod tests {
     #[test]
     fn appended_tables_parse_back() {
         let d = Deploy { key: "F9".into(), keep: 5, interactive: true, ..pi() };
-        let text = template(Path::new("/x")) + &render_deploy(&d) + &render_deploy(&Deploy { name: "zero".into(), ..pi() });
+        let text =
+            template(Path::new("/x")) + &render_deploy(&d) + &render_deploy(&Deploy { name: "zero".into(), ..pi() });
         let s: ProjectSettings = toml::from_str(&text).unwrap();
         assert_eq!(s.deploy, vec![d, Deploy { name: "zero".into(), ..pi() }]);
         assert!(s.problem().is_none());
@@ -688,7 +709,10 @@ mod tests {
             + "\n[[actions]]\nkey = \"F6\"\nname = \"logs\"\ncmd = \"true\"\n";
         let b2 = Deploy { host: "other".into(), keep: 0, key: "F9".into(), ..b.clone() };
         let edited = with_deploy(&text, 1, Some(&b2)).unwrap();
-        assert!(edited.contains("# about b\n\n[[deploy]]\nname = \"b\"\nhost = \"other\"") && edited.contains("# Mainframe settings"));
+        assert!(
+            edited.contains("# about b\n\n[[deploy]]\nname = \"b\"\nhost = \"other\"")
+                && edited.contains("# Mainframe settings")
+        );
         let s: ProjectSettings = toml::from_str(&edited).unwrap();
         assert_eq!(s.deploy, vec![a.clone(), b2]);
         assert_eq!(s.actions.len(), 1);
@@ -721,9 +745,16 @@ mod tests {
         fs::write(bin.join("systemctl"), stub).unwrap();
         fs::write(bin.join("journalctl"), "#!/bin/sh\necho logs\n").unwrap();
         fs::write(bin.join("sleep"), "#!/bin/sh\n").unwrap();
-        Command::new("chmod").args(["+x"]).arg(bin.join("systemctl")).arg(bin.join("journalctl")).arg(bin.join("sleep")).status().unwrap();
+        Command::new("chmod")
+            .args(["+x"])
+            .arg(bin.join("systemctl"))
+            .arg(bin.join("journalctl"))
+            .arg(bin.join("sleep"))
+            .status()
+            .unwrap();
 
-        let d = Deploy { sudo: false, service: "my app".replace(' ', "-"), remote_path: "/opt/my app/run".into(), ..pi() };
+        let d =
+            Deploy { sudo: false, service: "my app".replace(' ', "-"), remote_path: "/opt/my app/run".into(), ..pi() };
         let script = d.service_script(&d.unit().unwrap());
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
         let run = |down: bool| {
@@ -743,7 +774,11 @@ mod tests {
         let unit = fs::read_to_string(home.join(".config/systemd/user/my-app.service")).unwrap();
         assert!(unit.contains("ExecStart=\"/opt/my app/run\"\n") && unit.contains("WantedBy=default.target"), "{unit}");
         let calls = fs::read_to_string(&log).unwrap();
-        assert!(calls.contains("daemon-reload") && calls.contains("enable -q my-app.service") && calls.contains("restart my-app.service"));
+        assert!(
+            calls.contains("daemon-reload")
+                && calls.contains("enable -q my-app.service")
+                && calls.contains("restart my-app.service")
+        );
 
         fs::write(&log, "").unwrap();
         assert!(run(false).status.success());
@@ -779,7 +814,12 @@ mod tests {
         let root = Path::new("/home/u/proj");
         let from = Deploy { from: "main".into(), ..pi() };
         let cross = Deploy { build: "RUSTFLAGS=x cross build".into(), service: "myapp".into(), ..pi() };
-        for d in [pi(), from, cross, Deploy { sudo: false, interactive: true, build: String::new(), restart: String::new(), keep: 0, ..pi() }] {
+        for d in [
+            pi(),
+            from,
+            cross,
+            Deploy { sudo: false, interactive: true, build: String::new(), restart: String::new(), keep: 0, ..pi() },
+        ] {
             assert!(sh_syntax_ok(&d.script(root, false)), "{}", d.script(root, false));
             assert!(sh_syntax_ok(&d.script(root, true)), "{}", d.script(root, true));
             assert!(sh_syntax_ok(&d.rollback_script()));
@@ -818,7 +858,12 @@ mod tests {
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
         let run = |script: String| {
             let out = Command::new("sh").arg("-c").arg(script).current_dir(&base).env("PATH", &path).output().unwrap();
-            assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            assert!(
+                out.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
             String::from_utf8_lossy(&out.stdout).into_owned()
         };
         let backups = || {
@@ -872,7 +917,12 @@ mod tests {
         fs::write(&stub, "#!/bin/sh\nwhile [ $# -gt 1 ]; do case $1 in -o) shift 2;; -t) shift;; *) shift; break;; esac; done\nexec sh -c \"$*\"\n").unwrap();
         Command::new("chmod").arg("+x").arg(&stub).status().unwrap();
         let git = |args: &[&str]| {
-            let out = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(&repo).output().unwrap();
+            let out = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
             assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         };
         git(&["init", "-q", "-b", "main"]);

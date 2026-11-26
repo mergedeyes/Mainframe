@@ -21,9 +21,10 @@ impl App {
                 self.browser.reload();
                 // Select the top-level component that appeared in this dir.
                 if let Ok(rel) = path.strip_prefix(&self.browser.cwd)
-                    && let Some(first) = rel.components().next() {
-                        self.browser.select_name(&first.as_os_str().to_string_lossy());
-                    }
+                    && let Some(first) = rel.components().next()
+                {
+                    self.browser.select_name(&first.as_os_str().to_string_lossy());
+                }
             }
             Err(e) => self.set_status(format!("create failed: {e}"), Level::Err),
         }
@@ -103,7 +104,11 @@ impl App {
                 if dst.exists() {
                     dst = unique_name(&dst);
                 }
-                let res = if mv { move_path(&src, &dst) } else { run_quiet(&format!("cp -a -- {} {}", quote(&src), quote(&dst))) };
+                let res = if mv {
+                    move_path(&src, &dst)
+                } else {
+                    run_quiet(&format!("cp -a -- {} {}", quote(&src), quote(&dst)))
+                };
                 res.map_err(|e| format!("paste failed: {e}"))
             };
             match res {

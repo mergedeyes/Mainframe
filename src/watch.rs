@@ -16,9 +16,8 @@ use std::{
 };
 
 /// Build output, dependencies and caches: they change on every build and nobody edits them.
-pub const SKIP: &[&str] = &[
-    "target", "node_modules", "build", "build-release", "dist", "out", "zig-out", "__pycache__", "venv",
-];
+pub const SKIP: &[&str] =
+    &["target", "node_modules", "build", "build-release", "dist", "out", "zig-out", "__pycache__", "venv"];
 /// Stop descending after this many entries so a huge tree can't stall the thread.
 const MAX_ENTRIES: usize = 50_000;
 /// Branches and tags; enough for any repo that doesn't pack its refs.
@@ -118,9 +117,7 @@ fn walk(root: &Path, max: usize, editable: bool) -> u64 {
 
 /// Names, sizes and mtimes of one directory's entries.
 pub fn dir_fingerprint(dir: &Path) -> u64 {
-    fs::read_dir(dir)
-        .map(|rd| rd.flatten().fold(0u64, |acc, e| acc.wrapping_add(entry_hash(&e))))
-        .unwrap_or(0)
+    fs::read_dir(dir).map(|rd| rd.flatten().fold(0u64, |acc, e| acc.wrapping_add(entry_hash(&e)))).unwrap_or(0)
 }
 
 /// Mtimes of single files; one that doesn't exist (yet) counts too.

@@ -12,7 +12,11 @@ use crate::config::{home, path_key};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     /// `indent` keeps nested todos nested when the file is written back.
-    Todo { done: bool, text: String, indent: String },
+    Todo {
+        done: bool,
+        text: String,
+        indent: String,
+    },
     Note(String),
 }
 
@@ -129,7 +133,8 @@ mod tests {
 
     #[test]
     fn round_trips_markdown() {
-        let text = "# Ideas\n\n- [ ] ship it\n  - [x] nested done\n* [X] star bullet\n- plain bullet\n- [?] not a todo\n";
+        let text =
+            "# Ideas\n\n- [ ] ship it\n  - [x] nested done\n* [X] star bullet\n- plain bullet\n- [?] not a todo\n";
         let items = parse(text);
         assert_eq!(items[2], Item::todo("ship it"));
         assert_eq!(items[3], Item::Todo { done: true, text: "nested done".into(), indent: "  ".into() });
