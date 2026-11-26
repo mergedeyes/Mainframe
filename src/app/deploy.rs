@@ -11,14 +11,16 @@ use ratatui::{
     widgets::ListState,
 };
 
-use super::{App, Confirmed, Foreground, Level, Mode};
+use super::{App, Confirmed, Level, Mode};
 use crate::{
     config,
+    deploy::{self, Deploy},
+    filter_list,
     form::{Field, Form, FormKind},
     install,
     line::LineEdit,
     project::{self, Kind, Op, Plan, quote},
-    settings::{self, Deploy, ProjectSettings},
+    settings::{self, ProjectSettings},
 };
 
 pub struct DeployPicker {
@@ -95,8 +97,8 @@ impl App {
         let target = picker.selected().cloned();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char('j') | KeyCode::Down => picker.state.select(Some((cur + 1).min(len.saturating_sub(1)))),
-            KeyCode::Char('k') | KeyCode::Up => picker.state.select(Some(cur.saturating_sub(1))),
+            KeyCode::Char('j') | KeyCode::Down => filter_list::step(&mut picker.state, len, 1),
+            KeyCode::Char('k') | KeyCode::Up => filter_list::step(&mut picker.state, len, -1),
             KeyCode::Char('a') if picker.broken => {
                 self.set_status("the settings file doesn't parse — E opens it", Level::Err);
             }
@@ -146,13 +148,7 @@ impl App {
             Ok(path) => {
                 self.mode = Mode::Normal;
                 self.reopen_deploy = true;
-                self.pending = Some(Foreground {
-                    cmd: format!("{} {}", self.config.editor, quote(&path)),
-                    cwd: self.browser.cwd.clone(),
-                    wait: false,
-                    then_reload_config: false,
-                    cd_to_output: false,
-                });
+                self.edit_path(&path, "");
             }
             Err(e) => {
                 self.set_status(format!("can't create {}: {e}", config::pretty_path(&settings::dir())), Level::Err)
@@ -171,7 +167,7 @@ impl App {
             Run::Rollback => (d.rollback_script(), "rollback", format!("roll back {}", d.name)),
             Run::Backups => (d.backups_script(), "backups", format!("backups on {}", d.name)),
         };
-        let file = settings::script_file(root, &d.name, tag);
+        let file = deploy::script_file(root, &d.name, tag);
         let written = file.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&file, script));
         if let Err(e) = written {
             return self.set_status(format!("can't write {}: {e}", config::pretty_path(&file)), Level::Err);

@@ -40,6 +40,7 @@ use crate::{
     browser::{self, Browser, Preview},
     complete::Completer,
     config::{self, Config},
+    deploy::Deploy,
     form::Form,
     git::{self, GIT, GitInfo},
     history::History,
@@ -47,7 +48,7 @@ use crate::{
     notes,
     project::{self, Op, Plan, Project, quote},
     projects,
-    settings::{Deploy, ProjectSettings},
+    settings::ProjectSettings,
     watch::{self, Watcher},
 };
 

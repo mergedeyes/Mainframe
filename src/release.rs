@@ -6,12 +6,14 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use crate::{
+    config::dir_name,
     form::{Field, Form, FormKind},
-    git::git,
+    git::{git, git_lines as lines},
+    proc,
     project::{quote_str, which},
 };
 
@@ -38,6 +40,17 @@ struct Manifest {
     version: String,
     /// Committed with the bump: the manifest and its lock file, when there is one.
     files: Vec<&'static str>,
+}
+
+impl Kind {
+    /// The manifest, and the lock file committed with it when there is one.
+    fn files(self) -> [&'static str; 2] {
+        match self {
+            Kind::Cargo => ["Cargo.toml", "Cargo.lock"],
+            Kind::Npm => ["package.json", "package-lock.json"],
+            Kind::Python => ["pyproject.toml", "uv.lock"],
+        }
+    }
 }
 
 impl Manifest {
@@ -99,10 +112,6 @@ impl Ctx {
     }
 }
 
-fn lines(root: &Path, args: &[&str]) -> Vec<String> {
-    git(root, args).map(|o| String::from_utf8_lossy(&o).lines().map(str::to_string).collect()).unwrap_or_default()
-}
-
 fn first_line(root: &Path, args: &[&str]) -> Option<String> {
     lines(root, args).into_iter().next().filter(|l| !l.is_empty())
 }
@@ -141,9 +150,19 @@ fn first_version_line_is(text: &str, version: &str) -> bool {
 }
 
 fn detect_manifest(root: &Path) -> Option<Manifest> {
-    let exists = |f: &str| root.join(f).is_file();
-    let dir_name = || root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let (kind, name, version) = read_manifest(root)?;
+    let name = name.unwrap_or_else(|| dir_name(root));
+    let [manifest, lock] = kind.files();
+    let mut files = vec![manifest];
+    if root.join(lock).is_file() {
+        files.push(lock);
+    }
+    Some(Manifest { kind, name, version, files })
+}
 
+/// The first manifest found: its kind, package name and version.
+fn read_manifest(root: &Path) -> Option<(Kind, Option<String>, String)> {
+    let name_of = |n: Option<&toml::Value>| n.and_then(|n| n.as_str()).map(str::to_string);
     if let Ok(text) = fs::read_to_string(root.join("Cargo.toml")) {
         let t: toml::Table = text.parse().ok()?;
         let pkg = t.get("package");
@@ -153,22 +172,12 @@ fn detect_manifest(root: &Path) -> Option<Manifest> {
         if !first_version_line_is(&text, version) {
             return None;
         }
-        let name = pkg.and_then(|p| p.get("name")?.as_str()).map_or_else(dir_name, str::to_string);
-        let mut files = vec!["Cargo.toml"];
-        if exists("Cargo.lock") {
-            files.push("Cargo.lock");
-        }
-        return Some(Manifest { kind: Kind::Cargo, name, version: version.into(), files });
+        return Some((Kind::Cargo, name_of(pkg.and_then(|p| p.get("name"))), version.into()));
     }
     if let Ok(text) = fs::read_to_string(root.join("package.json")) {
         let j: serde_json::Value = serde_json::from_str(&text).ok()?;
         let version = j.get("version")?.as_str()?.to_string();
-        let name = j.get("name").and_then(|n| n.as_str()).map_or_else(dir_name, str::to_string);
-        let mut files = vec!["package.json"];
-        if exists("package-lock.json") {
-            files.push("package-lock.json");
-        }
-        return Some(Manifest { kind: Kind::Npm, name, version, files });
+        return Some((Kind::Npm, j.get("name").and_then(|n| n.as_str()).map(str::to_string), version));
     }
     if let Ok(text) = fs::read_to_string(root.join("pyproject.toml")) {
         let t: toml::Table = text.parse().ok()?;
@@ -177,12 +186,7 @@ fn detect_manifest(root: &Path) -> Option<Manifest> {
         if !first_version_line_is(&text, version) {
             return None;
         }
-        let name = table.get("name").and_then(|n| n.as_str()).map_or_else(dir_name, str::to_string);
-        let mut files = vec!["pyproject.toml"];
-        if exists("uv.lock") {
-            files.push("uv.lock");
-        }
-        return Some(Manifest { kind: Kind::Python, name, version: version.into(), files });
+        return Some((Kind::Python, name_of(table.get("name")), version.into()));
     }
     None
 }
@@ -210,42 +214,44 @@ fn default_checks(root: &Path, m: Option<&Manifest>) -> String {
     }
 }
 
-/// A workflow under `.github/workflows` started by pushing a tag; one named "release" first.
-fn tag_workflow(root: &Path) -> Option<String> {
-    let mut found: Vec<String> = fs::read_dir(root.join(".github/workflows"))
-        .ok()?
+/// The workflow files under `.github/workflows` (name, text), sorted by name.
+fn workflows(root: &Path) -> Vec<(String, String)> {
+    let Ok(rd) = fs::read_dir(root.join(".github/workflows")) else { return Vec::new() };
+    let mut found: Vec<(String, String)> = rd
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             if !(name.ends_with(".yml") || name.ends_with(".yaml")) {
                 return None;
             }
-            let text = fs::read_to_string(e.path()).ok()?;
-            text.lines().any(|l| l.trim_start().starts_with("tags:")).then_some(name)
+            Some((name, fs::read_to_string(e.path()).ok()?))
         })
+        .collect();
+    found.sort();
+    found
+}
+
+/// A workflow started by pushing a tag; one named "release" first.
+fn tag_workflow(root: &Path) -> Option<String> {
+    let mut found: Vec<String> = workflows(root)
+        .into_iter()
+        .filter(|(_, text)| text.lines().any(|l| l.trim_start().starts_with("tags:")))
+        .map(|(name, _)| name)
         .collect();
     found.sort_by_key(|n| !n.contains("release"));
     found.into_iter().next()
 }
 
-/// A workflow under `.github/workflows` that runs on pull requests.
+/// A workflow that runs on pull requests.
 fn pr_workflow(root: &Path) -> Option<String> {
-    let mut found: Vec<String> = fs::read_dir(root.join(".github/workflows"))
-        .ok()?
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let text = fs::read_to_string(e.path()).ok()?;
-            text.lines().any(|l| !l.trim_start().starts_with('#') && l.contains("pull_request")).then_some(name)
-        })
-        .collect();
-    found.sort();
-    found.into_iter().next()
+    workflows(root)
+        .into_iter()
+        .find(|(_, text)| text.lines().any(|l| !l.trim_start().starts_with('#') && l.contains("pull_request")))
+        .map(|(name, _)| name)
 }
 
 fn gh(args: &[&str]) -> Option<String> {
-    let out = Command::new("gh").args(args).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    proc::text(Command::new("gh").args(args))
 }
 
 /// What GitHub requires before a merge into `main` (branch protection and rulesets), as
@@ -563,10 +569,7 @@ pub fn steps(form: &Form, ctx: &Ctx) -> Vec<String> {
             s.push(format!("gh run watch \"$id\"{r} -i 20 --exit-status && gh release view {tag}{r}"));
         }
         GH_RELEASE => {
-            let name = ctx.manifest.as_ref().map_or_else(
-                || ctx.root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                |m| m.name.clone(),
-            );
+            let name = ctx.manifest.as_ref().map_or_else(|| dir_name(&ctx.root), |m| m.name.clone());
             let mut title = name.chars();
             let title = title.next().map(|c| c.to_uppercase().chain(title).collect::<String>()).unwrap_or_default();
             s.push(format!(
@@ -619,5 +622,44 @@ mod tests {
         let cargo = "[package]\nname = \"x\"\nversion = \"0.3.1\"\n\n[dependencies.y]\nversion = \"1\"\n";
         assert!(first_version_line_is(cargo, "0.3.1"));
         assert!(!first_version_line_is("[package]\nversion=\"0.3.1\"\n", "0.3.1"));
+    }
+
+    #[test]
+    fn manifests_bring_their_lock_file() {
+        let dir = crate::testutil::temp_dir("release-manifest");
+        let cargo = dir.join("crate");
+        fs::create_dir_all(&cargo).unwrap();
+        fs::write(cargo.join("Cargo.toml"), "[package]\nname = \"tool\"\nversion = \"0.2.0\"\n").unwrap();
+        fs::write(cargo.join("Cargo.lock"), "").unwrap();
+        let npm = dir.join("web-app");
+        fs::create_dir_all(&npm).unwrap();
+        fs::write(npm.join("package.json"), r#"{"version": "1.4.0"}"#).unwrap();
+        let ws = dir.join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(ws.join("Cargo.toml"), "[workspace.package]\nversion = \"3.0.0\"\n").unwrap();
+
+        let (c, n, w) = (detect_manifest(&cargo).unwrap(), detect_manifest(&npm).unwrap(), detect_manifest(&ws));
+        let none = detect_manifest(&dir);
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(c.kind == Kind::Cargo && c.name == "tool" && c.version == "0.2.0");
+        assert_eq!(c.files, ["Cargo.toml", "Cargo.lock"]);
+        // No name in package.json: the folder's; no lock file: just the manifest.
+        assert!(n.kind == Kind::Npm && n.name == "web-app" && n.files == ["package.json"]);
+        assert!(w.is_some_and(|w| w.name == "ws" && w.version == "3.0.0"));
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn finds_tag_and_pr_workflows() {
+        let dir = crate::testutil::temp_dir("release-workflows");
+        let wf = dir.join(".github/workflows");
+        fs::create_dir_all(&wf).unwrap();
+        fs::write(wf.join("ci.yml"), "on:\n  pull_request:\n  push:\n    tags: ['v*']\n").unwrap();
+        fs::write(wf.join("release.yaml"), "on:\n  push:\n    tags: ['v*']\n").unwrap();
+        fs::write(wf.join("README.md"), "runs on pull_request\n").unwrap();
+        let (tag, pr) = (tag_workflow(&dir), pr_workflow(&dir));
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(tag.as_deref(), Some("release.yaml"));
+        assert_eq!(pr.as_deref(), Some("ci.yml"));
     }
 }

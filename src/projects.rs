@@ -170,8 +170,7 @@ mod tests {
     use super::*;
 
     fn tree(name: &str, files: &[&str]) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("mainframe-projects-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root = crate::testutil::temp_dir(&format!("projects-{name}"));
         for f in files {
             let p = root.join(f);
             if f.ends_with('/') {

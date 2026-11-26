@@ -3,13 +3,14 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use ratatui::style::Color;
 
 use crate::{
     form::{Field, Form, FormKind},
+    proc,
     project::quote_str,
 };
 
@@ -69,9 +70,17 @@ impl GitInfo {
 
 /// stdout of a successful `git` run in `cwd`.
 pub fn git(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let out =
-        Command::new("git").args(args).current_dir(cwd).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-    out.status.success().then_some(out.stdout)
+    proc::output(Command::new("git").args(args).current_dir(cwd))
+}
+
+/// [`git`] as text, trimmed.
+pub fn git_text(cwd: &Path, args: &[&str]) -> Option<String> {
+    proc::text(Command::new("git").args(args).current_dir(cwd))
+}
+
+/// [`git`] as lines; none when it fails.
+pub fn git_lines(cwd: &Path, args: &[&str]) -> Vec<String> {
+    git(cwd, args).map(|o| String::from_utf8_lossy(&o).lines().map(String::from).collect()).unwrap_or_default()
 }
 
 /// Staged and unstaged changes to one file, without the `diff --git` header.
@@ -199,9 +208,7 @@ pub fn uncommitted(path: &Path) -> usize {
 
 /// Local branches, most recently committed to first.
 pub fn local_branches(cwd: &Path) -> Vec<String> {
-    git(cwd, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"])
-        .map(|raw| String::from_utf8_lossy(&raw).lines().map(String::from).collect())
-        .unwrap_or_default()
+    git_lines(cwd, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"])
 }
 
 /// `git push` for a local branch other than (or the same as) the checked-out one, without
@@ -210,9 +217,7 @@ pub fn push_branch_cmd(cwd: &Path, branch: &str) -> Result<String, String> {
     if git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_none() {
         return Err(format!("no local branch {branch}"));
     }
-    let config = |key: &str| {
-        git(cwd, &["config", &format!("branch.{branch}.{key}")]).map(|o| String::from_utf8_lossy(&o).trim().to_string())
-    };
+    let config = |key: &str| git_text(cwd, &["config", &format!("branch.{branch}.{key}")]);
     let b = quote_str(branch);
     Ok(match (config("remote"), config("merge")) {
         // "." tracks a local branch; pushing there would only move that branch.
@@ -262,12 +267,9 @@ const DATE: &str = "format-local:%Y-%m-%d %H:%M";
 /// What branches are measured against: the remote's default branch, else a local main or master.
 pub fn base_branch(cwd: &Path) -> Option<String> {
     let exists = |r: &str| git(cwd, &["rev-parse", "--verify", "--quiet", r]).is_some();
-    git(cwd, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
-        .map(|o| String::from_utf8_lossy(&o).trim().to_string())
-        .filter(|b| !b.is_empty())
-        .or_else(|| {
-            ["origin/main", "origin/master", "main", "master"].into_iter().find(|b| exists(b)).map(String::from)
-        })
+    git_text(cwd, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).filter(|b| !b.is_empty()).or_else(|| {
+        ["origin/main", "origin/master", "main", "master"].into_iter().find(|b| exists(b)).map(String::from)
+    })
 }
 
 /// Every branch, local and on remotes, in merge order: the numbered ones (work that isn't
@@ -373,7 +375,7 @@ fn count(track: &str, what: &str) -> u32 {
 /// The checked-out branch, the remote branch it tracks and how many of its commits it
 /// doesn't have yet, when there are any. As of the last fetch: git doesn't know newer ones.
 pub fn behind_upstream(dir: &Path) -> Option<(String, String, usize)> {
-    let out = |args: &[&str]| git(dir, args).map(|o| String::from_utf8_lossy(&o).trim().to_string());
+    let out = |args: &[&str]| git_text(dir, args);
     let upstream = out(&["rev-parse", "--abbrev-ref", "@{upstream}"])?;
     let behind: usize = out(&["rev-list", "--count", "HEAD..@{upstream}"])?.parse().ok()?;
     let branch = out(&["branch", "--show-current"])?;
@@ -460,15 +462,7 @@ pub fn gh_repo_form(source: &Path) -> Result<Form, String> {
     if crate::project::which("gh").is_none() {
         return Err("gh (GitHub CLI) is not installed".into());
     }
-    let owner = Command::new("gh")
-        .args(["api", "user", "--jq", ".login"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-    let Some(owner) = owner else {
+    let Some(owner) = proc::text(Command::new("gh").args(["api", "user", "--jq", ".login"])) else {
         return Err("gh isn't logged in — run `gh auth login` (e.g. via !)".into());
     };
 
@@ -542,23 +536,15 @@ pub fn gh_repo_create_cmd(form: &Form) -> String {
 #[cfg(test)]
 mod push_tests {
     use super::*;
+    use crate::testutil::{git as test_git, temp_dir};
 
     /// Pushing another branch leaves the checkout alone and lands on the remote.
     #[test]
     fn pushes_a_branch_that_is_not_checked_out() {
-        let base = std::env::temp_dir().join(format!("mainframe-push-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = temp_dir("push");
         let (repo, remote) = (base.join("repo"), base.join("remote.git"));
         std::fs::create_dir_all(&repo).unwrap();
-        let run = |dir: &Path, args: &[&str]| {
-            let out = Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(args)
-                .current_dir(dir)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        };
+        let run = |dir: &Path, args: &[&str]| drop(test_git(dir, args));
         run(&base, &["init", "-q", "--bare", "remote.git"]);
         run(&repo, &["init", "-q", "-b", "main"]);
         run(&repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
@@ -590,22 +576,14 @@ mod push_tests {
 #[cfg(test)]
 mod worktree_tests {
     use super::*;
+    use crate::testutil::{git, temp_dir};
 
     #[test]
     fn lists_worktrees_with_branch_gone_and_dirty_state() {
-        let base = std::env::temp_dir().join(format!("mainframe-wt-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = temp_dir("wt");
         let main = base.join("repo");
         std::fs::create_dir_all(&main).unwrap();
-        let run = |args: &[&str]| {
-            let out = Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(args)
-                .current_dir(&main)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        };
+        let run = |args: &[&str]| drop(git(&main, args));
         run(&["init", "-q", "-b", "main"]);
         run(&["commit", "-q", "--allow-empty", "-m", "one"]);
         run(&["worktree", "add", "-q", "../locks", "-b", "edit-locks"]);
@@ -632,13 +610,7 @@ mod branch_tests {
     use super::*;
 
     fn run(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        crate::testutil::git(dir, args);
     }
 
     fn commit(dir: &Path, msg: &str, date: &str) {
@@ -647,8 +619,7 @@ mod branch_tests {
 
     /// A repo with a bare remote: main pushed, and its HEAD set like a clone would have it.
     fn setup(name: &str) -> (PathBuf, PathBuf) {
-        let base = std::env::temp_dir().join(format!("mainframe-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = crate::testutil::temp_dir(name);
         let repo = base.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         run(&base, &["init", "-q", "--bare", "-b", "main", "remote.git"]);

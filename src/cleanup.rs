@@ -9,11 +9,12 @@ use std::{
         unix::fs::{FileExt, MetadataExt},
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use crate::{
     browser::human_size,
+    config, git, proc,
     project::{self, Kind, Project, quote, quote_str, which},
     targets,
 };
@@ -379,7 +380,7 @@ fn scan_tree(root: &Path, place: Option<&str>, shared: bool, skip: &HashSet<Path
             let rel = sub.strip_prefix(root).unwrap_or(&sub).to_path_buf();
             if sub.join("CACHEDIR.TAG").is_file() {
                 let parent = rel.parent().unwrap_or(Path::new(""));
-                let name = rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = config::dir_name(&rel);
                 let mut item = Item::dirs(
                     &sub,
                     name,
@@ -420,20 +421,17 @@ fn scan_tree(root: &Path, place: Option<&str>, shared: bool, skip: &HashSet<Path
 /// The project's folder in each other worktree of its repo (folder name, path), so a
 /// project in a subfolder of the repo maps to the same subfolder there.
 fn other_worktrees(root: &Path) -> Vec<(String, PathBuf)> {
-    let Some(top) = command_output("git", &["rev-parse", "--show-toplevel"], root).map(PathBuf::from) else {
+    let Some(top) = git::git_text(root, &["rev-parse", "--show-toplevel"]).map(PathBuf::from) else {
         return Vec::new();
     };
     let Ok(rel) = root.strip_prefix(&top) else { return Vec::new() };
-    let list = command_output("git", &["worktree", "list", "--porcelain"], root).unwrap_or_default();
-    list.lines()
-        .filter_map(|l| l.strip_prefix("worktree "))
-        .map(PathBuf::from)
-        .filter(|w| *w != top)
+    git::worktrees(root)
+        .into_iter()
+        .filter(|w| w.path != top)
         .map(|w| {
-            let name = w.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             // join("") would add a trailing slash
-            let dir = if rel.as_os_str().is_empty() { w } else { w.join(rel) };
-            (name, dir)
+            let dir = if rel.as_os_str().is_empty() { w.path.clone() } else { w.path.join(rel) };
+            (w.name(), dir)
         })
         .filter(|(_, p)| p.is_dir())
         .collect()
@@ -617,9 +615,7 @@ fn cargo_target_dir(root: &Path) -> PathBuf {
 
 fn command_output(program: &str, args: &[&str], cwd: &Path) -> Option<String> {
     which(program)?;
-    let out = Command::new(program).args(args).current_dir(cwd).stderr(Stdio::null()).output().ok()?;
-    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
-    (out.status.success() && !s.is_empty()).then_some(s)
+    proc::text(Command::new(program).args(args).current_dir(cwd)).filter(|s| !s.is_empty())
 }
 
 /// Removes every path git tracks something in: a `build/` with sources in it isn't output.
@@ -634,21 +630,11 @@ fn drop_tracked(root: &Path, items: &mut Vec<Item>) {
     if inside.is_empty() {
         return;
     }
-    let Ok(out) = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "-z", "--"])
-        .args(&inside)
-        .stderr(Stdio::null())
-        .output()
+    let Some(out) = proc::output(Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--"]).args(&inside))
     else {
         return;
     };
-    if !out.status.success() {
-        return;
-    }
     let tracked: Vec<PathBuf> = out
-        .stdout
         .split(|&b| b == 0)
         .filter(|s| !s.is_empty())
         .map(|s| root.join(String::from_utf8_lossy(s).as_ref()))
@@ -708,8 +694,7 @@ mod tests {
 
     #[test]
     fn offers_output_but_not_tracked_folders() {
-        let root = std::env::temp_dir().join(format!("mainframe-cleanup-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root = crate::testutil::temp_dir("cleanup");
         for d in [
             "node_modules/x",
             "dist",
@@ -729,14 +714,14 @@ mod tests {
         fs::write(root.join("tools/web/package.json"), "{}").unwrap();
         fs::write(root.join("old/target/CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55").unwrap();
         fs::write(root.join(".hidden/p/package.json"), "{}").unwrap();
-        let git = |args: &[&str]| Command::new("git").arg("-C").arg(&root).args(args).output().unwrap();
+        let git = |args: &[&str]| crate::testutil::git(&root, args);
         git(&["init", "-q", "-b", "main"]);
         git(&["add", "build/keep.sh", "package.json", "pyproject.toml"]);
-        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]);
+        git(&["commit", "-q", "-m", "init"]);
         // A linked worktree with its own build output.
         let wt = root.with_file_name(format!("{}-wt", root.file_name().unwrap().to_string_lossy()));
         let _ = fs::remove_dir_all(&wt);
-        Command::new("git").arg("-C").arg(&root).args(["worktree", "add", "-q"]).arg(&wt).output().unwrap();
+        git(&["worktree", "add", "-q", wt.to_str().unwrap()]);
         fs::create_dir_all(wt.join("node_modules")).unwrap();
 
         let items = scan(&root);
@@ -791,7 +776,7 @@ mod usage_tests {
 
     #[test]
     fn script_succeeds_and_reports_what_was_freed() {
-        let dir = std::env::temp_dir().join(format!("mainframe-script-{}", std::process::id()));
+        let dir = crate::testutil::temp_dir("script");
         fs::create_dir_all(dir.join("junk")).unwrap();
         fs::write(dir.join("junk/a"), vec![1u8; 100_000]).unwrap();
         let s = script(&["rm -rf -- junk".into()], "junk", Some(Usage { bytes: 1, disk: None }));

@@ -4,7 +4,9 @@ mod browser;
 mod cleanup;
 mod complete;
 mod config;
+mod deploy;
 mod desktop;
+mod filter_list;
 mod form;
 mod fuzzy;
 mod git;
@@ -13,6 +15,7 @@ mod install;
 mod line;
 mod locate;
 mod notes;
+mod proc;
 mod project;
 mod projects;
 mod release;
@@ -20,6 +23,8 @@ mod scaffold;
 mod settings;
 mod targets;
 mod task;
+#[cfg(test)]
+mod testutil;
 mod ui;
 mod watch;
 

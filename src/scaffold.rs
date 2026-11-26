@@ -232,17 +232,7 @@ Don't commit anything for this unless the user asks.
 /// `git status`. Works from a subfolder of the repo and in linked worktrees; outside a
 /// repo there's nothing to do.
 fn exclude_here(dir: &Path, rel: &str) -> std::io::Result<()> {
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
+    let git = |args: &[&str]| crate::git::git_text(dir, args);
     let (Some(file), Some(prefix)) = (
         git(&["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"]),
         git(&["rev-parse", "--show-prefix"]),
@@ -323,6 +313,7 @@ fn append_line(path: &Path, pattern: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{git, temp_dir};
 
     #[test]
     fn keeps_only_the_chosen_stacks_checks() {
@@ -349,9 +340,7 @@ mod tests {
 
     #[test]
     fn creates_a_repo_with_an_ignored_claude_md() {
-        let root = std::env::temp_dir().join(format!("mainframe-scaffold-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
+        let root = temp_dir("scaffold");
 
         assert!(target(&root, "").is_err());
         assert!(target(&root, "a/b").is_err());
@@ -360,8 +349,7 @@ mod tests {
 
         create(&dir, Some("# demo\n")).unwrap();
         assert_eq!(fs::read_to_string(dir.join("CLAUDE.md")).unwrap(), "# demo\n");
-        let branch = crate::git::git(&dir, &["symbolic-ref", "--short", "HEAD"]).unwrap();
-        assert_eq!(String::from_utf8_lossy(&branch).trim(), "main");
+        assert_eq!(git(&dir, &["symbolic-ref", "--short", "HEAD"]).trim(), "main");
         // Ignored, so it never shows up for `git add -A`.
         assert!(crate::git::git(&dir, &["check-ignore", "-q", "CLAUDE.md"]).is_some());
 
@@ -378,20 +366,13 @@ mod tests {
     }
 
     fn repo(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mainframe-preset-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        Command::new("git").args(["init", "-q", "-b", "main"]).current_dir(&dir).output().unwrap();
+        let dir = temp_dir(&format!("preset-{name}"));
+        git(&dir, &["init", "-q", "-b", "main"]);
         dir
     }
 
     fn status(dir: &Path) -> String {
-        let out = Command::new("git")
-            .args(["status", "--porcelain", "--untracked-files=all"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout).into_owned()
+        git(dir, &["status", "--porcelain", "--untracked-files=all"])
     }
 
     #[test]
@@ -414,12 +395,8 @@ mod tests {
         let dir = top.join("app");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("CLAUDE.md"), "# app\nmine\n").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(&top).output().unwrap();
-        Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"])
-            .current_dir(&top)
-            .output()
-            .unwrap();
+        git(&top, &["add", "."]);
+        git(&top, &["commit", "-q", "-m", "x"]);
 
         let first = apply_preset(&dir, "# preset\n- a rule\n");
         let second = apply_preset(&dir, "# preset\n- a rule\n");
@@ -437,9 +414,7 @@ mod tests {
 
     #[test]
     fn stacks_follow_the_build_tools() {
-        let dir = std::env::temp_dir().join(format!("mainframe-preset-stacks-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("preset-stacks");
         let none = stacks(&dir);
         fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
         fs::write(dir.join("package.json"), "{}").unwrap();

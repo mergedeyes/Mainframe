@@ -1,13 +1,9 @@
 //! Everything a project knows how to run, for the task picker: the build tool's usual
 //! commands, its binaries and examples, package.json scripts, make targets, just recipes.
 
-use std::{
-    collections::BTreeSet,
-    fs,
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{collections::BTreeSet, fs, path::Path, process::Command};
 
+use crate::proc;
 use crate::project::{Kind, Op, Project, quote_str, which};
 
 pub struct Target {
@@ -203,15 +199,8 @@ fn just_recipes(root: &Path) -> Vec<String> {
     if which("just").is_none() {
         return Vec::new();
     }
-    Command::new("just")
-        .arg("--summary")
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().map(String::from).collect())
+    proc::text(Command::new("just").arg("--summary").current_dir(root))
+        .map(|o| o.split_whitespace().map(String::from).collect())
         .unwrap_or_default()
 }
 

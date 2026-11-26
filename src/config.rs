@@ -293,6 +293,11 @@ pub fn expand_tilde(s: &str) -> PathBuf {
     }
 }
 
+/// The last part of `p` (a folder's name), or "" for `/`.
+pub fn dir_name(p: &Path) -> String {
+    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
 /// Shows a path with $HOME abbreviated to `~`.
 pub fn pretty_path(p: &Path) -> String {
     let home = home();

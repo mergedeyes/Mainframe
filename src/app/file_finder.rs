@@ -3,18 +3,14 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
-use ratatui::{
-    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    widgets::ListState,
-};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{App, Level, Mode};
 use crate::{
-    config, fuzzy,
-    line::{Edit, LineEdit},
+    config,
+    filter_list::{self, FilterList, Match},
     watch,
 };
 
@@ -26,39 +22,7 @@ const SHOWN: usize = 200;
 pub struct FileFinder {
     pub root: PathBuf,
     /// Paths relative to `root`.
-    files: Vec<String>,
-    pub filter: LineEdit,
-    /// Indices into `files`, best match first.
-    pub visible: Vec<usize>,
-    pub state: ListState,
-    pub total: usize,
-}
-
-impl FileFinder {
-    fn apply_filter(&mut self) {
-        let q = self.filter.text.replace(' ', "").to_lowercase();
-        let mut scored: Vec<(i64, usize)> = self
-            .files
-            .iter()
-            .enumerate()
-            .filter_map(|(i, f)| fuzzy::score(&q, &f.to_lowercase()).map(|s| (s, i)))
-            .collect();
-        self.total = scored.len();
-        if !q.is_empty() {
-            scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        }
-        self.visible = scored.into_iter().take(SHOWN).map(|(_, i)| i).collect();
-        self.state.select((!self.visible.is_empty()).then_some(0));
-    }
-
-    pub fn file(&self, i: usize) -> &str {
-        &self.files[i]
-    }
-
-    fn selected(&self) -> Option<PathBuf> {
-        let i = *self.visible.get(self.state.selected()?)?;
-        Some(self.root.join(&self.files[i]))
-    }
+    pub list: FilterList<String>,
 }
 
 impl App {
@@ -74,36 +38,19 @@ impl App {
         if files.is_empty() {
             return self.set_status(format!("no files under {}", config::pretty_path(&root)), Level::Info);
         }
-        let mut finder = FileFinder {
-            root,
-            files,
-            filter: LineEdit::default(),
-            visible: Vec::new(),
-            state: ListState::default(),
-            total: 0,
-        };
-        finder.apply_filter();
-        self.mode = Mode::Files(finder);
+        let list = FilterList::new(files, String::clone, Match::Fuzzy { limit: SHOWN });
+        self.mode = Mode::Files(FileFinder { root, list });
     }
 
     pub(super) fn key_file_finder(&mut self, key: KeyEvent) {
         let Mode::Files(finder) = &mut self.mode else { return };
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let len = finder.visible.len();
-        let cur = finder.state.selected().unwrap_or(0);
         match key.code {
-            KeyCode::Esc => self.mode = Mode::Normal,
-            KeyCode::Char('c') if ctrl => self.mode = Mode::Normal,
-            KeyCode::Down | KeyCode::Tab => finder.state.select(Some((cur + 1).min(len.saturating_sub(1)))),
-            KeyCode::Char('n') if ctrl => finder.state.select(Some((cur + 1).min(len.saturating_sub(1)))),
-            KeyCode::Up | KeyCode::BackTab => finder.state.select(Some(cur.saturating_sub(1))),
-            KeyCode::Char('p') if ctrl => finder.state.select(Some(cur.saturating_sub(1))),
             // Enter shows the file in the list, ^E opens it in the editor right away.
             KeyCode::Enter => self.pick_file(false),
-            KeyCode::Char('e') if ctrl => self.pick_file(true),
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => self.pick_file(true),
             _ => {
-                if finder.filter.key(key) == Edit::Changed {
-                    finder.apply_filter();
+                if finder.list.key(key) == filter_list::Key::Close {
+                    self.mode = Mode::Normal;
                 }
             }
         }
@@ -111,7 +58,7 @@ impl App {
 
     fn pick_file(&mut self, edit: bool) {
         let Mode::Files(finder) = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
-        let Some(path) = finder.selected() else { return };
+        let Some(path) = finder.list.selected().map(|f| finder.root.join(f)) else { return };
         let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { return };
         self.browser.cd(dir.to_path_buf());
         self.browser.select_name(&name.to_string_lossy());
@@ -126,16 +73,9 @@ impl App {
 /// usual build and dependency folders.
 fn list_files(root: &Path, git: bool) -> Vec<String> {
     if git {
-        let out = Command::new("git")
-            .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
-            .current_dir(root)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
-        if let Ok(out) = out
-            && out.status.success()
-        {
-            let mut files: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        let args = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
+        if let Some(out) = crate::git::git(root, &args) {
+            let mut files: Vec<String> = String::from_utf8_lossy(&out)
                 .split('\0')
                 .filter(|f| !f.is_empty() && root.join(f).exists())
                 .take(MAX_FILES)
