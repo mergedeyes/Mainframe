@@ -66,9 +66,11 @@ prune_gone_branches = true
 ```
 
 It only deletes a local branch when everything on it is in `origin/main`,
-so no work is lost. One that isn't merged, for example after a squash
-merge or when its pull request was closed, stays, and the output says so.
-The branch you have checked out stays too.
+so no work is lost. That includes branches GitHub rebased or squashed when
+merging: their commits have new ids in `main`, but merging the branch again
+wouldn't change a file. One whose work isn't in `main`, for example when
+its pull request was closed, stays, and the output says so; so does one
+that would conflict with `main`. The branch you have checked out stays too.
 
 ## Pushing another branch
 

@@ -385,15 +385,22 @@ pub fn behind_upstream(dir: &Path) -> Option<(String, String, usize)> {
 /// `g f`: fetch from every remote and drop remote branches that are gone. With `prune_local`,
 /// also delete local branches whose remote branch is gone, but only those whose work is in
 /// `base`, so nothing that isn't merged is lost; the others are listed and kept.
+///
+/// Work counts as in `base` when the branch's commits are, or when merging the branch into
+/// `base` wouldn't change a file: that's a branch rebased or squashed on the way in, whose
+/// commits `base` has under other ids. A merge with conflicts keeps the branch.
 pub fn fetch_cmd(prune_local: bool, base: Option<&str>) -> String {
     let fetch = format!("{GIT} fetch --all --prune");
     if !prune_local {
         return fetch;
     }
     format!(
-        "{fetch} && base={} && git for-each-ref --format='%(if:equals=gone)%(upstream:track,nobracket)%(then)%(refname:short)%(end)' refs/heads \
+        "{fetch} && base={} && \
+         in_base() {{ t=$(git merge-tree --write-tree --no-messages \"$base\" \"$1\" 2>/dev/null) && [ \"$t\" = \"$(git rev-parse \"$base^{{tree}}\")\" ]; }} && \
+         git for-each-ref --format='%(if:equals=gone)%(upstream:track,nobracket)%(then)%(refname:short)%(end)' refs/heads \
          | while read -r b; do [ -n \"$b\" ] || continue; \
          if git merge-base --is-ancestor \"$b\" \"$base\"; then git branch -D \"$b\"; \
+         elif in_base \"$b\"; then git branch -D \"$b\" && echo \"  (rebased or squashed: its changes are in $base)\"; \
          else echo \"kept $b: its remote branch is gone, but it isn't merged into $base\"; fi; done",
         quote_str(base.unwrap_or("HEAD"))
     )
@@ -678,16 +685,31 @@ mod branch_tests {
     #[test]
     fn prunes_only_merged_branches_whose_remote_is_gone() {
         let (base, repo) = setup("prune");
-        for b in ["merged", "unmerged"] {
+        let start = git_text(&repo, &["rev-parse", "HEAD"]).unwrap();
+        // Each branch changes its own file; "conflict" changes the one main changes later.
+        for (b, file) in
+            [("merged", "m"), ("rebased", "r"), ("squashed", "s"), ("unmerged", "u"), ("conflict", "shared")]
+        {
             run(&repo, &["switch", "-q", "-c", b, "main"]);
-            commit(&repo, b, "2026-02-01T10:00:00");
+            for n in 1..=2 {
+                std::fs::write(repo.join(file), format!("{b} {n}\n")).unwrap();
+                run(&repo, &["add", file]);
+                commit(&repo, &format!("{b} {n}"), "2026-02-01T10:00:00");
+            }
             run(&repo, &["push", "-q", "-u", "origin", b]);
         }
-        // The pull request for "merged" was merged on the remote, then both branches deleted there.
+        // On the remote: "merged" merged, "rebased" rebased onto main (new commit ids), "squashed"
+        // squash-merged, then main moves on; every branch is deleted there.
         run(&repo, &["switch", "-q", "main"]);
         run(&repo, &["merge", "-q", "--no-ff", "-m", "merge", "merged"]);
-        run(&repo, &["push", "-q", "origin", "main", ":merged", ":unmerged"]);
-        run(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+        run(&repo, &["cherry-pick", "rebased~1", "rebased"]);
+        run(&repo, &["merge", "-q", "--squash", "squashed"]);
+        commit(&repo, "squash", "2026-02-02T10:00:00");
+        std::fs::write(repo.join("shared"), "main\n").unwrap();
+        run(&repo, &["add", "shared"]);
+        commit(&repo, "later", "2026-02-03T10:00:00");
+        run(&repo, &["push", "-q", "origin", "main", ":merged", ":rebased", ":squashed", ":unmerged", ":conflict"]);
+        run(&repo, &["reset", "-q", "--hard", &start]);
         let sh = |cmd: String| {
             let out = Command::new("sh").arg("-c").arg(&cmd).env("LC_ALL", "C").current_dir(&repo).output().unwrap();
             assert!(out.status.success(), "{cmd}: {}", String::from_utf8_lossy(&out.stderr));
@@ -700,12 +722,13 @@ mod branch_tests {
         let after_prune = local_branches(&repo);
         std::fs::remove_dir_all(&base).unwrap();
 
-        assert_eq!(after_plain.len(), 3);
+        assert_eq!(after_plain.len(), 6);
         let mut left = after_prune.clone();
         left.sort();
-        assert_eq!(left, ["main", "unmerged"]);
+        assert_eq!(left, ["conflict", "main", "unmerged"], "{out}");
         assert!(out.contains("Deleted branch merged"), "{out}");
-        assert!(out.contains("kept unmerged"), "{out}");
+        assert!(out.contains("Deleted branch rebased") && out.contains("Deleted branch squashed"), "{out}");
+        assert!(out.contains("kept unmerged") && out.contains("kept conflict"), "{out}");
     }
 
     /// After a fetch brought new commits that weren't pulled, the checkout is behind.
