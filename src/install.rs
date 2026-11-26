@@ -246,6 +246,26 @@ fn cargo_owner(cargo_home: &Path, name: &str) -> Option<String> {
 
 /// `cargo install` into the configured install dir: `--root ~/.local` puts
 /// binaries in `~/.local/bin`. Plain `cargo install` would use ~/.cargo/bin.
+/// What `p` in the install picker runs first: only the commits the branch's remote has.
+/// `--ff-only` stops instead of merging when the branch has commits of its own.
+pub const PULL: &str = "git pull --ff-only";
+
+/// What `p` runs before installing `c`: the pull, and a rebuild when `c` is a build the pull
+/// makes stale. Err when Mainframe can't tell how to rebuild it.
+pub fn pull_first(c: &Candidate, cargo: bool) -> Result<String, String> {
+    match (c.kind.as_str(), &c.triple) {
+        ("script", _) => Ok(PULL.into()),
+        ("release", None) if cargo => Ok(format!("{PULL} && cargo build --release")),
+        ("debug", None) if cargo => Ok(format!("{PULL} && cargo build")),
+        _ => Err(format!(
+            "p can't rebuild {} ({}) after pulling — g p, build it, then i{}",
+            c.name,
+            c.kind,
+            if cargo { ", or p on the cargo install row" } else { "" }
+        )),
+    }
+}
+
 pub fn cargo_install_cmd(install_dir: &Path) -> String {
     match install_dir.parent().filter(|_| install_dir.file_name().is_some_and(|n| n == "bin")) {
         Some(root) => format!("cargo install --path . --root {}", crate::project::quote(root)),
@@ -325,5 +345,42 @@ pub fn age(t: SystemTime) -> String {
         60..3600 => format!("{}m ago", secs / 60),
         3600..86400 => format!("{}h ago", secs / 3600),
         _ => format!("{}d ago", secs / 86400),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(kind: &str, triple: Option<&str>) -> Candidate {
+        Candidate {
+            path: PathBuf::from("/p/target/release/app"),
+            name: "app".into(),
+            rel: "target/release/app".into(),
+            kind: kind.into(),
+            triple: triple.map(String::from),
+            arch: String::new(),
+            size: 0,
+            modified: SystemTime::UNIX_EPOCH,
+            stale: false,
+            installed: Installed::No,
+            dest: PathBuf::from("/home/u/.local/bin/app"),
+            shadowed_by: None,
+            desktop: Vec::new(),
+        }
+    }
+
+    /// Scripts only need the pull; plain cargo builds are rebuilt after it; the rest can't be.
+    #[test]
+    fn pull_first_rebuilds_what_it_knows_how_to() {
+        assert_eq!(pull_first(&candidate("script", None), false).unwrap(), "git pull --ff-only");
+        assert_eq!(
+            pull_first(&candidate("release", None), true).unwrap(),
+            "git pull --ff-only && cargo build --release"
+        );
+        assert_eq!(pull_first(&candidate("debug", None), true).unwrap(), "git pull --ff-only && cargo build");
+        assert!(pull_first(&candidate("release", Some("aarch64-unknown-linux-gnu")), true).is_err());
+        assert!(pull_first(&candidate("release example", None), true).unwrap_err().contains("cargo install row"));
+        assert!(!pull_first(&candidate("binary", None), false).unwrap_err().contains("cargo install row"));
     }
 }

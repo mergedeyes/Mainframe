@@ -21,17 +21,33 @@ other executables. For each one it shows:
 | Key | What it does |
 |---|---|
 | `Enter` or `i` | install it |
+| `p` | pull, then install the newest version; see below |
 | `r` | run it |
 | `d` | review the project's `.desktop` entry for it |
 | `u` | remove the other copy that comes earlier on your PATH |
 | `Esc` | close |
 
+### Installing the newest version
+
+After merging pull requests on GitHub, the new commits aren't on disk yet:
+`Enter` would install the version you have checked out. `p` pulls first,
+then installs:
+
+- the `cargo install` row: `git pull --ff-only`, then `cargo install`
+- a release or debug build in `target/`: the pull, then `cargo build
+  --release` or `cargo build`, then the install
+- a script: the pull, then the install
+
+Examples and cross builds can't be rebuilt this way; for those, `g p`,
+build, then `i`. `--ff-only` means the pull only takes commits from the
+remote: when your branch has commits of its own that aren't pushed, it
+stops with a message instead of merging, and nothing is installed.
+
 When the branch you have checked out is behind its remote branch, the
-picker says so at the top ("main is 8 commits behind origin/main"), and
-installing asks first. That happens after merging pull requests on GitHub
-and fetching: the new commits are known, but the files on disk are still
-the old ones until `g p` pulls them. Mainframe only knows commits up to
-your last fetch, so after merging, `g p` before `i` is the safe order.
+picker also says so at the top ("main is 8 commits behind origin/main"),
+and `Enter` asks before installing the old version. It only knows commits
+up to your last fetch; `p` fetches right then, so it always gets the
+newest.
 
 Installing copies the program to `~/.local/bin` (`install_dir` in the
 [configuration](../reference/config.md)). In a Cargo project, the first row

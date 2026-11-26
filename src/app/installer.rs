@@ -62,8 +62,9 @@ pub struct DesktopReview {
 
 /// What the review was gating.
 pub enum AfterReview {
-    InstallBinary(Box<Candidate>, PathBuf),
-    CargoInstall(PathBuf),
+    /// The candidate, the project root, and what runs first (`p`: pull, maybe rebuild).
+    InstallBinary(Box<Candidate>, PathBuf, Option<String>),
+    CargoInstall(PathBuf, Option<String>),
     Nothing,
 }
 
@@ -127,8 +128,8 @@ impl App {
                 let root = picker.root.clone();
                 let plans = picker.selected_desktop().to_vec();
                 let then = match picker.selected().cloned() {
-                    Some(c) => AfterReview::InstallBinary(Box::new(c), root),
-                    None => AfterReview::CargoInstall(root),
+                    Some(c) => AfterReview::InstallBinary(Box::new(c), root, None),
+                    None => AfterReview::CargoInstall(root, None),
                 };
                 // An install from a checkout that isn't pulled is the old version: ask first.
                 let behind = picker.behind.clone();
@@ -136,12 +137,26 @@ impl App {
                 match behind {
                     Some(behind) => {
                         self.mode = Mode::Confirm {
-                            msg: format!("{behind}: install without those commits? g p pulls them first [y/N]"),
+                            msg: format!("{behind}: install without those commits? [y/N] (p in i pulls them first)"),
                             action: Confirmed::Install(then, plans),
                         };
                     }
                     None => self.start_install(then, plans),
                 }
+            }
+            // Pull (and rebuild when it's a build), then install: the newest version, fetched now.
+            KeyCode::Char('p') => {
+                let root = picker.root.clone();
+                let plans = picker.selected_desktop().to_vec();
+                let then = match picker.selected().cloned() {
+                    Some(c) => match install::pull_first(&c, picker.cargo) {
+                        Ok(before) => AfterReview::InstallBinary(Box::new(c), root, Some(before)),
+                        Err(e) => return self.set_status(e, Level::Info),
+                    },
+                    None => AfterReview::CargoInstall(root, Some(install::PULL.into())),
+                };
+                self.mode = Mode::Normal;
+                self.start_install(then, plans);
             }
             KeyCode::Char('d') => {
                 let plans = picker.selected_desktop().to_vec();
@@ -219,9 +234,9 @@ impl App {
 
     pub(super) fn finish_install(&mut self, then: AfterReview, desktop: Vec<DesktopPlan>) {
         match then {
-            AfterReview::InstallBinary(c, root) => self.install_binary(&c, &root),
-            AfterReview::CargoInstall(root) => {
-                let cmd = install::cargo_install_cmd(&self.config.install_dir());
+            AfterReview::InstallBinary(c, root, before) => self.install_binary(&c, &root, before.as_deref()),
+            AfterReview::CargoInstall(root, before) => {
+                let cmd = then_run(before.as_deref(), install::cargo_install_cmd(&self.config.install_dir()));
                 self.start_task("cargo install".into(), Plan { cmd, cwd: root });
             }
             AfterReview::Nothing => {}
@@ -258,7 +273,7 @@ impl App {
         }
     }
 
-    pub(super) fn install_binary(&mut self, c: &Candidate, root: &Path) {
+    pub(super) fn install_binary(&mut self, c: &Candidate, root: &Path, before: Option<&str>) {
         let dest = &c.dest;
         let dir = dest.parent().unwrap_or(Path::new("/"));
         let dir_s = dir.to_string_lossy();
@@ -271,7 +286,15 @@ impl App {
             d = quote_str(&dir_s),
             pretty_dir = config::pretty_path(dir),
         );
-        self.start_task(format!("install {}", c.name), Plan { cmd, cwd: root.to_path_buf() });
+        self.start_task(format!("install {}", c.name), Plan { cmd: then_run(before, cmd), cwd: root.to_path_buf() });
+    }
+}
+
+/// `cmd`, after `before` when there is something to run first.
+fn then_run(before: Option<&str>, cmd: String) -> String {
+    match before {
+        Some(b) => format!("{b} && {cmd}"),
+        None => cmd,
     }
 }
 
