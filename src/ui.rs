@@ -1150,7 +1150,10 @@ fn draw_deploy(f: &mut Frame, picker: &mut DeployPicker, area: Rect) {
     if picker.broken {
         details.push(Line::from(vec![
             label(""),
-            Span::styled("doesn't parse, so no targets show — E opens it, the status line says where", Style::new().fg(Color::Red)),
+            Span::styled(
+                "doesn't parse, so no targets show — E opens it, the status line says where",
+                Style::new().fg(Color::Red),
+            ),
         ]));
     }
 

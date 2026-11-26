@@ -70,7 +70,8 @@ impl App {
         // A file that doesn't parse reads as no targets; the picker (with E) beats a form
         // for a new one then, and the status line says what's wrong.
         let broken = self.settings.deploy.is_empty()
-            && fs::read_to_string(settings::file_for(&root)).is_ok_and(|t| toml::from_str::<ProjectSettings>(&t).is_err());
+            && fs::read_to_string(settings::file_for(&root))
+                .is_ok_and(|t| toml::from_str::<ProjectSettings>(&t).is_err());
         if self.settings.deploy.is_empty() && !broken {
             return self.new_deploy_form();
         }

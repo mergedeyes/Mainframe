@@ -9,7 +9,13 @@ does:
   one project
 
 Both are [TOML](https://toml.io). A mistake in a file shows up as a message
-when Mainframe starts, and the defaults apply until it's fixed.
+when Mainframe starts, with the line it's on, and the defaults apply until
+it's fixed.
+
+In TOML, everything below a `[section]` header belongs to that section, up to
+the next header. In `config.toml` that doesn't matter: a setting like
+`prune_gone_branches = true` works anywhere in the file, also at the end,
+below `[runners]` or an `[[actions]]` entry.
 
 ## config.toml
 
