@@ -78,6 +78,11 @@ pub fn git_text(cwd: &Path, args: &[&str]) -> Option<String> {
     proc::text(Command::new("git").args(args).current_dir(cwd))
 }
 
+/// [`git`] as lines; none when it fails.
+pub fn git_lines(cwd: &Path, args: &[&str]) -> Vec<String> {
+    git(cwd, args).map(|o| String::from_utf8_lossy(&o).lines().map(String::from).collect()).unwrap_or_default()
+}
+
 /// Staged and unstaged changes to one file, without the `diff --git` header.
 pub fn diff(path: &Path) -> Option<Vec<String>> {
     let dir = path.parent()?;
@@ -203,9 +208,7 @@ pub fn uncommitted(path: &Path) -> usize {
 
 /// Local branches, most recently committed to first.
 pub fn local_branches(cwd: &Path) -> Vec<String> {
-    git(cwd, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"])
-        .map(|raw| String::from_utf8_lossy(&raw).lines().map(String::from).collect())
-        .unwrap_or_default()
+    git_lines(cwd, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"])
 }
 
 /// `git push` for a local branch other than (or the same as) the checked-out one, without
@@ -264,12 +267,9 @@ const DATE: &str = "format-local:%Y-%m-%d %H:%M";
 /// What branches are measured against: the remote's default branch, else a local main or master.
 pub fn base_branch(cwd: &Path) -> Option<String> {
     let exists = |r: &str| git(cwd, &["rev-parse", "--verify", "--quiet", r]).is_some();
-    git(cwd, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
-        .map(|o| String::from_utf8_lossy(&o).trim().to_string())
-        .filter(|b| !b.is_empty())
-        .or_else(|| {
-            ["origin/main", "origin/master", "main", "master"].into_iter().find(|b| exists(b)).map(String::from)
-        })
+    git_text(cwd, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).filter(|b| !b.is_empty()).or_else(|| {
+        ["origin/main", "origin/master", "main", "master"].into_iter().find(|b| exists(b)).map(String::from)
+    })
 }
 
 /// Every branch, local and on remotes, in merge order: the numbered ones (work that isn't

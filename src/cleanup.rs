@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     browser::human_size,
-    proc,
+    config, git, proc,
     project::{self, Kind, Project, quote, quote_str, which},
     targets,
 };
@@ -380,7 +380,7 @@ fn scan_tree(root: &Path, place: Option<&str>, shared: bool, skip: &HashSet<Path
             let rel = sub.strip_prefix(root).unwrap_or(&sub).to_path_buf();
             if sub.join("CACHEDIR.TAG").is_file() {
                 let parent = rel.parent().unwrap_or(Path::new(""));
-                let name = rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = config::dir_name(&rel);
                 let mut item = Item::dirs(
                     &sub,
                     name,
@@ -421,20 +421,17 @@ fn scan_tree(root: &Path, place: Option<&str>, shared: bool, skip: &HashSet<Path
 /// The project's folder in each other worktree of its repo (folder name, path), so a
 /// project in a subfolder of the repo maps to the same subfolder there.
 fn other_worktrees(root: &Path) -> Vec<(String, PathBuf)> {
-    let Some(top) = command_output("git", &["rev-parse", "--show-toplevel"], root).map(PathBuf::from) else {
+    let Some(top) = git::git_text(root, &["rev-parse", "--show-toplevel"]).map(PathBuf::from) else {
         return Vec::new();
     };
     let Ok(rel) = root.strip_prefix(&top) else { return Vec::new() };
-    let list = command_output("git", &["worktree", "list", "--porcelain"], root).unwrap_or_default();
-    list.lines()
-        .filter_map(|l| l.strip_prefix("worktree "))
-        .map(PathBuf::from)
-        .filter(|w| *w != top)
+    git::worktrees(root)
+        .into_iter()
+        .filter(|w| w.path != top)
         .map(|w| {
-            let name = w.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             // join("") would add a trailing slash
-            let dir = if rel.as_os_str().is_empty() { w } else { w.join(rel) };
-            (name, dir)
+            let dir = if rel.as_os_str().is_empty() { w.path.clone() } else { w.path.join(rel) };
+            (w.name(), dir)
         })
         .filter(|(_, p)| p.is_dir())
         .collect()
