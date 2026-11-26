@@ -697,8 +697,7 @@ mod tests {
 
     #[test]
     fn offers_output_but_not_tracked_folders() {
-        let root = std::env::temp_dir().join(format!("mainframe-cleanup-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
+        let root = crate::testutil::temp_dir("cleanup");
         for d in [
             "node_modules/x",
             "dist",
@@ -718,14 +717,14 @@ mod tests {
         fs::write(root.join("tools/web/package.json"), "{}").unwrap();
         fs::write(root.join("old/target/CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55").unwrap();
         fs::write(root.join(".hidden/p/package.json"), "{}").unwrap();
-        let git = |args: &[&str]| Command::new("git").arg("-C").arg(&root).args(args).output().unwrap();
+        let git = |args: &[&str]| crate::testutil::git(&root, args);
         git(&["init", "-q", "-b", "main"]);
         git(&["add", "build/keep.sh", "package.json", "pyproject.toml"]);
-        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]);
+        git(&["commit", "-q", "-m", "init"]);
         // A linked worktree with its own build output.
         let wt = root.with_file_name(format!("{}-wt", root.file_name().unwrap().to_string_lossy()));
         let _ = fs::remove_dir_all(&wt);
-        Command::new("git").arg("-C").arg(&root).args(["worktree", "add", "-q"]).arg(&wt).output().unwrap();
+        git(&["worktree", "add", "-q", wt.to_str().unwrap()]);
         fs::create_dir_all(wt.join("node_modules")).unwrap();
 
         let items = scan(&root);
@@ -780,7 +779,7 @@ mod usage_tests {
 
     #[test]
     fn script_succeeds_and_reports_what_was_freed() {
-        let dir = std::env::temp_dir().join(format!("mainframe-script-{}", std::process::id()));
+        let dir = crate::testutil::temp_dir("script");
         fs::create_dir_all(dir.join("junk")).unwrap();
         fs::write(dir.join("junk/a"), vec![1u8; 100_000]).unwrap();
         let s = script(&["rm -rf -- junk".into()], "junk", Some(Usage { bytes: 1, disk: None }));

@@ -663,7 +663,11 @@ pub fn script_file(root: &Path, name: &str, what: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{git, stub, temp_dir};
     use std::process::Command;
+
+    /// Drops ssh's options and the host, then runs the remote command through sh like sshd does.
+    const SSH_STUB: &str = "#!/bin/sh\nwhile [ $# -gt 1 ]; do case $1 in -o) shift 2;; -t) shift;; *) shift; break;; esac; done\nexec sh -c \"$*\"\n";
 
     fn pi() -> Deploy {
         Deploy {
@@ -730,28 +734,19 @@ mod tests {
     /// when it's missing, only restarts it after that, fails when it doesn't come up.
     #[test]
     fn service_is_created_once_then_restarted() {
-        let base = std::env::temp_dir().join(format!("mainframe-service-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
+        let base = temp_dir("service-test");
         let bin = base.join("bin");
         let home = base.join("home");
-        fs::create_dir_all(&bin).unwrap();
         fs::create_dir_all(&home).unwrap();
         let log = base.join("log");
         // `cat` works once the unit file exists; `is-active` fails when $DOWN is set.
-        let stub = format!(
+        let systemctl = format!(
             "#!/bin/sh\n[ \"$1\" = --user ] && shift\necho \"$*\" >> {log}\ncase $1 in\n  cat) [ -f \"$HOME/.config/systemd/user/$2\" ];;\n  is-active) [ -z \"$DOWN\" ];;\nesac\n",
             log = log.display()
         );
-        fs::write(bin.join("systemctl"), stub).unwrap();
-        fs::write(bin.join("journalctl"), "#!/bin/sh\necho logs\n").unwrap();
-        fs::write(bin.join("sleep"), "#!/bin/sh\n").unwrap();
-        Command::new("chmod")
-            .args(["+x"])
-            .arg(bin.join("systemctl"))
-            .arg(bin.join("journalctl"))
-            .arg(bin.join("sleep"))
-            .status()
-            .unwrap();
+        stub(&bin, "systemctl", &systemctl);
+        stub(&bin, "journalctl", "#!/bin/sh\necho logs\n");
+        stub(&bin, "sleep", "#!/bin/sh\n");
 
         let d =
             Deploy { sudo: false, service: "my app".replace(' ', "-"), remote_path: "/opt/my app/run".into(), ..pi() };
@@ -831,14 +826,9 @@ mod tests {
     /// replaced by a stub that just runs the command locally.
     #[test]
     fn replaces_with_backup_and_rolls_back() {
-        let base = std::env::temp_dir().join(format!("mainframe-deploy-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
+        let base = temp_dir("deploy-test");
         let bin = base.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let stub = bin.join("ssh");
-        // Drops options and the host, then runs the remote command through sh like sshd does.
-        fs::write(&stub, "#!/bin/sh\nwhile [ $# -gt 1 ]; do case $1 in -o) shift 2;; -t) shift;; *) shift; break;; esac; done\nexec sh -c \"$*\"\n").unwrap();
-        Command::new("chmod").arg("+x").arg(&stub).status().unwrap();
+        stub(&bin, "ssh", SSH_STUB);
 
         let remote = base.join("remote/app");
         fs::create_dir_all(remote.parent().unwrap()).unwrap();
@@ -907,24 +897,12 @@ mod tests {
     /// removed afterwards (or kept when asked), the working copy stays as it was.
     #[test]
     fn from_builds_the_branch_in_a_separate_checkout() {
-        let base = std::env::temp_dir().join(format!("mainframe-deploy-from-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
+        let base = temp_dir("deploy-from");
         let (bin, repo, work) = (base.join("bin"), base.join("repo"), base.join("cache/work"));
         let proj = repo.join("app");
-        fs::create_dir_all(&bin).unwrap();
         fs::create_dir_all(&proj).unwrap();
-        let stub = bin.join("ssh");
-        fs::write(&stub, "#!/bin/sh\nwhile [ $# -gt 1 ]; do case $1 in -o) shift 2;; -t) shift;; *) shift; break;; esac; done\nexec sh -c \"$*\"\n").unwrap();
-        Command::new("chmod").arg("+x").arg(&stub).status().unwrap();
-        let git = |args: &[&str]| {
-            let out = Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(args)
-                .current_dir(&repo)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        };
+        stub(&bin, "ssh", SSH_STUB);
+        let git = |args: &[&str]| drop(git(&repo, args));
         git(&["init", "-q", "-b", "main"]);
         fs::write(proj.join("version.txt"), "main").unwrap();
         git(&["add", "."]);

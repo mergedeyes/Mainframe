@@ -536,23 +536,15 @@ pub fn gh_repo_create_cmd(form: &Form) -> String {
 #[cfg(test)]
 mod push_tests {
     use super::*;
+    use crate::testutil::{git as test_git, temp_dir};
 
     /// Pushing another branch leaves the checkout alone and lands on the remote.
     #[test]
     fn pushes_a_branch_that_is_not_checked_out() {
-        let base = std::env::temp_dir().join(format!("mainframe-push-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = temp_dir("push");
         let (repo, remote) = (base.join("repo"), base.join("remote.git"));
         std::fs::create_dir_all(&repo).unwrap();
-        let run = |dir: &Path, args: &[&str]| {
-            let out = Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(args)
-                .current_dir(dir)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        };
+        let run = |dir: &Path, args: &[&str]| drop(test_git(dir, args));
         run(&base, &["init", "-q", "--bare", "remote.git"]);
         run(&repo, &["init", "-q", "-b", "main"]);
         run(&repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
@@ -584,22 +576,14 @@ mod push_tests {
 #[cfg(test)]
 mod worktree_tests {
     use super::*;
+    use crate::testutil::{git, temp_dir};
 
     #[test]
     fn lists_worktrees_with_branch_gone_and_dirty_state() {
-        let base = std::env::temp_dir().join(format!("mainframe-wt-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = temp_dir("wt");
         let main = base.join("repo");
         std::fs::create_dir_all(&main).unwrap();
-        let run = |args: &[&str]| {
-            let out = Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(args)
-                .current_dir(&main)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        };
+        let run = |args: &[&str]| drop(git(&main, args));
         run(&["init", "-q", "-b", "main"]);
         run(&["commit", "-q", "--allow-empty", "-m", "one"]);
         run(&["worktree", "add", "-q", "../locks", "-b", "edit-locks"]);
@@ -626,13 +610,7 @@ mod branch_tests {
     use super::*;
 
     fn run(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        crate::testutil::git(dir, args);
     }
 
     fn commit(dir: &Path, msg: &str, date: &str) {
@@ -641,8 +619,7 @@ mod branch_tests {
 
     /// A repo with a bare remote: main pushed, and its HEAD set like a clone would have it.
     fn setup(name: &str) -> (PathBuf, PathBuf) {
-        let base = std::env::temp_dir().join(format!("mainframe-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = crate::testutil::temp_dir(name);
         let repo = base.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         run(&base, &["init", "-q", "--bare", "-b", "main", "remote.git"]);

@@ -22,6 +22,8 @@ mod scaffold;
 mod settings;
 mod targets;
 mod task;
+#[cfg(test)]
+mod testutil;
 mod ui;
 mod watch;
 
