@@ -86,8 +86,9 @@ for every stack.
 
 ### Bringing the preset into an existing project
 
-`Ctrl-L` in the `J` picker brings the template into the selected project,
-with the checks for the build tools it uses. A Tauri app, for example, gets
+`Ctrl-L` brings the template into the project you're in, with the checks
+for the build tools it uses. In the `J` picker, `Ctrl-L` does the same for
+the selected project. A Tauri app, for example, gets
 both the Rust and the Node checks. Mainframe asks first, then:
 
 - **The project has no instructions yet** (no `CLAUDE.md`,
