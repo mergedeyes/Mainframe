@@ -443,7 +443,7 @@ fn scan_tree(root: &Path, place: Option<&str>, shared: bool, skip: &HashSet<Path
 /// The project's folder in each other worktree of its repo (folder name, path), so a
 /// project in a subfolder of the repo maps to the same subfolder there.
 fn other_worktrees(root: &Path) -> Vec<(String, PathBuf)> {
-    let Some(top) = git::git_text(root, &["rev-parse", "--show-toplevel"]).map(PathBuf::from) else {
+    let Some(top) = git::git_text(root, &["rev-parse", "--show-toplevel"]).map(|t| git::path_from_git(&t)) else {
         return Vec::new();
     };
     let Ok(rel) = root.strip_prefix(&top) else { return Vec::new() };

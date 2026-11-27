@@ -100,10 +100,16 @@ pub fn diff(path: &Path) -> Option<Vec<String>> {
     (!lines.is_empty()).then_some(lines)
 }
 
+/// A path git printed. Git for Windows writes `C:/Users/…`; Windows' own separator
+/// keeps paths built from it from mixing both.
+pub fn path_from_git(s: &str) -> PathBuf {
+    if cfg!(windows) { PathBuf::from(s.replace('/', "\\")) } else { PathBuf::from(s) }
+}
+
 pub fn status(cwd: &Path) -> Option<GitInfo> {
     let dirs = git(cwd, &["rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"])?;
     let dirs = String::from_utf8_lossy(&dirs);
-    let mut dirs = dirs.lines().map(PathBuf::from);
+    let mut dirs = dirs.lines().map(path_from_git);
     let (root, git_dir) = (dirs.next()?, dirs.next()?);
     // Printed relative to `cwd` unless it's elsewhere (worktrees).
     let common_dir = cwd.join(dirs.next()?);
@@ -190,7 +196,7 @@ pub fn worktrees(cwd: &Path) -> Vec<Worktree> {
     let mut out: Vec<Worktree> = Vec::new();
     for line in String::from_utf8_lossy(&raw).lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
-            out.push(Worktree { path: PathBuf::from(p), branch: None, gone: false });
+            out.push(Worktree { path: path_from_git(p), branch: None, gone: false });
         } else if let Some(w) = out.last_mut() {
             if let Some(b) = line.strip_prefix("branch ") {
                 w.branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
