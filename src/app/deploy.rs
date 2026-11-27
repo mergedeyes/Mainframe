@@ -14,12 +14,12 @@ use ratatui::{
 use super::{App, Confirmed, Level, Mode};
 use crate::{
     config,
-    deploy::{self, Deploy},
+    deploy::Deploy,
     filter_list,
     form::{Field, Form, FormKind},
     install,
     line::LineEdit,
-    project::{self, Kind, Op, Plan, quote},
+    project::{self, Kind, Op, Plan},
     settings::{self, ProjectSettings},
 };
 
@@ -40,12 +40,7 @@ impl DeployPicker {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Run {
-    Deploy,
-    Rollback,
-    Backups,
-}
+pub use crate::deploy::Run;
 
 impl App {
     /// Reads the project's settings again when the project changed (or `force`).
@@ -156,23 +151,23 @@ impl App {
         }
     }
 
-    /// Writes the script and runs it: in the output pane, or in the real terminal when the
-    /// target asks for passwords.
+    /// Runs it: in the output pane, or in the real terminal when the target asks for passwords.
     pub(super) fn run_deploy(&mut self, d: &Deploy, root: &Path, what: Run) {
         if let Some(p) = d.problem() {
             return self.set_status(format!("deploy {}: {p} — D then e fixes it", d.name), Level::Err);
         }
-        let (script, tag, label) = match what {
-            Run::Deploy => (d.script(root, self.config.keep_deploy_builds), "deploy", format!("deploy {}", d.name)),
-            Run::Rollback => (d.rollback_script(), "rollback", format!("roll back {}", d.name)),
-            Run::Backups => (d.backups_script(), "backups", format!("backups on {}", d.name)),
+        let label = match what {
+            Run::Deploy => format!("deploy {}", d.name),
+            Run::Rollback => format!("roll back {}", d.name),
+            Run::Backups => format!("backups on {}", d.name),
         };
-        let file = deploy::script_file(root, &d.name, tag);
-        let written = file.parent().map_or(Ok(()), fs::create_dir_all).and_then(|_| fs::write(&file, script));
-        if let Err(e) = written {
-            return self.set_status(format!("can't write {}: {e}", config::pretty_path(&file)), Level::Err);
-        }
-        let plan = Plan { cmd: crate::cmd::Cmd::Sh(format!("sh {}", quote(&file))), cwd: root.to_path_buf() };
+        let run = crate::cmd::Builtin::Deploy {
+            target: Box::new(d.clone()),
+            root: root.to_path_buf(),
+            keep_build: self.config.keep_deploy_builds,
+            run: what,
+        };
+        let plan = Plan { cmd: run.into(), cwd: root.to_path_buf() };
         if d.interactive {
             self.foreground(plan, true);
         } else {

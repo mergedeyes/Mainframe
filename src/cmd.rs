@@ -18,7 +18,8 @@ pub enum Cmd {
     Steps(Vec<Job>),
     /// A command line for the user's shell: typed with `:`, custom actions, runners.
     Shell(String),
-    /// A POSIX sh script of Mainframe's own that isn't Rust yet. On Windows it runs in Git's sh.
+    /// A POSIX sh command line: installing a system-wide .desktop entry with sudo (Linux
+    /// only), and output tabs saved before commands were steps. On Windows it'd run in Git's sh.
     Sh(String),
 }
 
@@ -101,6 +102,13 @@ pub enum Builtin {
         what: String,
         expected: Option<u64>,
     },
+    /// A deploy target's deploy, rollback or backup list, from the project at `root`.
+    Deploy {
+        target: Box<crate::deploy::Deploy>,
+        root: PathBuf,
+        keep_build: bool,
+        run: crate::deploy::Run,
+    },
     /// Copies a program to where it's installed.
     InstallFile {
         src: PathBuf,
@@ -133,6 +141,11 @@ impl Builtin {
                 format!("delete {}", paths.join(" "))
             }
             Builtin::Cleanup { what, .. } => format!("clean {what}"),
+            Builtin::Deploy { target, run, .. } => match run {
+                crate::deploy::Run::Deploy => format!("deploy {} → {}", target.name, target.host),
+                crate::deploy::Run::Rollback => format!("roll back {} on {}", target.name, target.host),
+                crate::deploy::Run::Backups => format!("list the backups on {}", target.host),
+            },
         }
     }
 }

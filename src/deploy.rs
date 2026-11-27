@@ -1,17 +1,28 @@
 //! Deploy targets (`D`): build, copy the result to another machine over ssh and swap it
-//! in for the binary there, keeping the old one as a backup. Everything runs as one shell
-//! script, so the output pane shows each step and you can read exactly what ran.
+//! in for the binary there, keeping the old one as a backup. Here runs in Rust; there, a
+//! short sh script per step does the work, since the other end is a Unix machine.
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
+    browser::human_size,
+    cmd::{Step, split_words},
     config::{self, path_key},
-    project::{quote, quote_str},
+    project::quote_str,
+    run::{Ctx, Exit},
 };
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+/// What `D` does with a target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Run {
+    Deploy,
+    Rollback,
+    Backups,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Deploy {
     pub name: String,
@@ -153,33 +164,31 @@ impl Deploy {
         }
     }
 
-    fn ssh_cmd(&self, tty: bool) -> String {
-        let mut cmd = String::from("ssh -o ConnectTimeout=10");
+    /// ssh with this target's options, up to the host.
+    fn ssh(&self, tty: bool) -> Step {
+        let mut s = Step::new(ssh_program()).args(["-o", "ConnectTimeout=10"]);
         if self.interactive {
-            // Several connections, one password: they share the first one.
-            let dir = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
-            let sock = dir.join("mainframe-ssh-%C");
-            cmd += &format!(" -o ControlMaster=auto -o ControlPath={} -o ControlPersist=60", quote(&sock));
+            // Several connections, one password: they share the first one. Windows' ssh can't.
+            if cfg!(unix) {
+                let dir = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+                let sock = dir.join("mainframe-ssh-%C");
+                s = s.args(["-o", "ControlMaster=auto", "-o"]).arg(format!("ControlPath={}", sock.display()));
+                s = s.args(["-o", "ControlPersist=60"]);
+            }
             if tty {
-                cmd += " -t";
+                s = s.arg("-t");
             }
         } else {
             // No terminal to ask on; a key (or agent) has to do.
-            cmd += " -o BatchMode=yes";
+            s = s.args(["-o", "BatchMode=yes"]);
         }
-        if !self.ssh.trim().is_empty() {
-            cmd += " ";
-            cmd += self.ssh.trim();
-        }
-        cmd += " ";
-        cmd += &quote_str(self.host.trim());
-        cmd
+        s.args(split_words(self.ssh.trim())).arg(self.host.trim())
     }
 
     /// `ssh … host 'sh -c …'`: the remote login shell may be fish or anything, so the
-    /// script always runs under sh.
-    fn remote(&self, script: &str, tty: bool) -> String {
-        format!("{} {}", self.ssh_cmd(tty), quote_str(&format!("sh -c {}", quote_str(script))))
+    /// script always runs under sh there.
+    fn remote(&self, script: &str, tty: bool) -> Step {
+        self.ssh(tty).arg(format!("sh -c {}", quote_str(script)))
     }
 
     /// Upload goes to /tmp first (no sudo needed), the swap is a rename in the target's folder.
@@ -199,13 +208,14 @@ impl Deploy {
         if self.sudo && !self.interactive { " (sudo without password? else set interactive = true)" } else { "" }
     }
 
-    /// The whole deploy as a shell script, run from the project root.
-    pub fn script(&self, root: &Path, keep_build: bool) -> String {
-        self.script_in(root, &self.build_dir(root), keep_build)
+    /// Remote: stdin into the upload's place in /tmp.
+    fn upload_script(&self) -> String {
+        format!("set -e\n{}\ncat > \"$tmp\"", self.remote_tmp())
     }
 
-    /// `script`, with the checkout for a `from` build at `work`.
-    fn script_in(&self, root: &Path, work: &Path, keep_build: bool) -> String {
+    /// Remote: the upload swapped in for `remote_path`, which is backed up first, with its
+    /// mode and owner kept; older backups beyond `keep` go.
+    fn replace_script(&self) -> String {
         let s = self.sudo_prefix();
         let dst = quote_str(&self.remote_path);
         let keep_tail = if self.keep == 0 {
@@ -216,7 +226,7 @@ impl Deploy {
                 self.keep + 1
             )
         };
-        let replace = format!(
+        format!(
             r#"set -e
 dst={dst}
 {tmp}
@@ -245,84 +255,14 @@ rm -f "$tmp"
 echo "✔ replaced $dst"
 {keep_tail}"#,
             tmp = self.remote_tmp(),
-        );
-        let upload = format!("set -e\n{}\ncat > \"$tmp\"", self.remote_tmp());
-
-        let mut out = String::from(PRELUDE);
-        let from = self.from.trim();
-        let artifact = if from.is_empty() {
-            quote(&self.artifact_path(root))
-        } else {
-            out += &self.checkout(from, work, keep_build);
-            let p = config::expand_tilde(self.artifact.trim());
-            // The project may be a subfolder of the repo: the same subfolder of the checkout.
-            if p.is_absolute() { quote(&p) } else { format!("\"$work/$prefix\"{}", quote(&p)) }
-        };
-        let build = self.build.trim();
-        if !build.is_empty() {
-            let hide = if runs_cross(build) { HIDE_CARGO_CONFIG } else { "" };
-            out += &format!(
-                "step {}\n(\n{hide}{build}\n) || fail 'build failed — nothing was copied'\n",
-                quote_str(&format!("build · {build}"))
-            );
-        }
-        out +=
-            &format!("a={artifact}\n[ -f \"$a\" ] || fail \"no file at $a — check artifact in the deploy settings\"\n");
-        out += &format!("step \"copy $(du -h \"$a\" | cut -f1) → \"{}\n", quote_str(self.host.trim()));
-        out += &format!("{} < \"$a\" || fail {}\n", self.remote(&upload, false), quote_str(self.hint_ssh()));
-        out += &format!("step {}\n", quote_str(&format!("swap in {}", self.remote_path)));
-        out += &format!(
-            "{} || fail {}\n",
-            self.remote(&replace, true),
-            quote_str(&format!("replacing failed{} — the binary there is the old one", self.hint_sudo()))
-        );
-        self.push_restart(&mut out, "the new binary is in place, D then u rolls back");
-        out += "printf '\\033[1;32m✔ deployed\\033[0m\\n'\n";
-        out
+        )
     }
 
-    /// Script lines that check `from` out in its own worktree at `work` (reused if it's
-    /// there) and continue in there; unless kept, it's removed when the script ends,
-    /// whether the deploy worked or not.
-    fn checkout(&self, from: &str, work: &Path, keep_build: bool) -> String {
-        let r = quote_str(from);
-        let mut out = format!(
-            r#"src=$(pwd)
-work={work}
-prefix=$(git rev-parse --show-prefix 2>/dev/null) || fail {needs_git}
-git rev-parse --verify --quiet {r}^{{commit}} >/dev/null || fail {missing}
-step {step}
-if [ -e "$work/.git" ]; then
-  git -C "$work" checkout -q --detach --force {r} && git -C "$work" clean -q -fd || fail 'could not update the build checkout'
-else
-  rm -rf "$work"
-  git worktree prune
-  mkdir -p "$(dirname "$work")"
-  git worktree add -q --detach "$work" {r} || fail 'could not create the build checkout'
-fi
-"#,
-            work = quote(work),
-            needs_git = quote_str(&format!("from = {from} needs a git repository")),
-            missing = quote_str(&format!("no branch or commit {from} here")),
-            step = quote_str(&format!("check out {from} → {}", config::pretty_path(work))),
-        );
-        if !keep_build {
-            out += "trap 'step \"remove build checkout\"; git -C \"$src\" worktree remove --force \"$work\" && echo \"removed $work\"' EXIT
-";
-        }
-        out += "[ ! -f \"$work/.gitmodules\" ] || git -C \"$work\" submodule update -q --init --recursive || fail 'could not fetch submodules'
-";
-        out += "echo \"building $(git -C \"$work\" log -1 --format='%h %s')\"
-";
-        out += "cd \"$work/$prefix\" || fail \"no $prefix in the checkout\"
-";
-        out
-    }
-
-    /// Puts the newest backup back. It's moved, not copied, so rolling back again goes one further.
-    pub fn rollback_script(&self) -> String {
+    /// Remote: the newest backup back in place. It's moved, not copied, so rolling back again
+    /// goes one further.
+    fn restore_script(&self) -> String {
         let s = self.sudo_prefix();
-        let restore = format!(
+        format!(
             r#"set -e
 dst={dst}
 bak=$(ls -1d "$dst".bak-* 2>/dev/null | sort -r | head -n 1)
@@ -332,44 +272,170 @@ echo "✔ restored $bak"
 echo "$(ls -1d "$dst".bak-* 2>/dev/null | wc -l) older backup(s) left"
 "#,
             dst = quote_str(&self.remote_path),
-        );
-        let mut out = String::from(PRELUDE);
-        out += &format!("step {}\n", quote_str(&format!("roll back {} on {}", self.remote_path, self.host.trim())));
-        out += &format!(
-            "{} || fail {}\n",
-            self.remote(&restore, true),
-            quote_str(&format!("roll back failed{}", self.hint_sudo()))
-        );
-        self.push_restart(&mut out, "the backup is back in place");
-        out
+        )
     }
 
-    /// Lists the binary and its backups on the remote.
-    pub fn backups_script(&self) -> String {
-        let list = format!(
+    /// Remote: the binary and its backups.
+    fn list_script(&self) -> String {
+        format!(
             "dst={}\nls -lh \"$dst\" \"$dst\".bak-* 2>/dev/null || echo \"nothing at $dst yet\"",
             quote_str(&self.remote_path)
-        );
-        format!("{PRELUDE}{} || fail {}\n", self.remote(&list, false), quote_str(self.hint_ssh()))
+        )
     }
 
-    fn push_restart(&self, out: &mut String, after: &str) {
+    /// [`Builtin::Deploy`]: deploys, rolls back or lists backups, from the project at `root`.
+    pub fn run(&self, ctx: &mut Ctx, root: &Path, keep_build: bool, what: Run) -> Result<(), String> {
+        self.run_in(ctx, root, &self.build_dir(root), keep_build, what)
+    }
+
+    /// `run`, with the checkout for a `from` build at `work`.
+    fn run_in(&self, ctx: &mut Ctx, root: &Path, work: &Path, keep_build: bool, what: Run) -> Result<(), String> {
+        match what {
+            Run::Deploy => {}
+            Run::Rollback => {
+                ctx.heading(format!("roll back {} on {}", self.remote_path, self.host.trim()));
+                let failed = format!("roll back failed{}", self.hint_sudo());
+                self.on_remote(ctx, &self.restore_script(), true, failed)?;
+                return self.restart(ctx, "the backup is back in place");
+            }
+            Run::Backups => return self.on_remote(ctx, &self.list_script(), false, self.hint_ssh().into()),
+        }
+        let from = self.from.trim();
+        if from.is_empty() {
+            return self.build_and_ship(ctx, root, &self.artifact_path(root));
+        }
+        let prefix = self.checkout(ctx, root, from, work)?;
+        let result = self.build_checkout(ctx, work, &prefix);
+        if !keep_build {
+            ctx.heading("remove build checkout");
+            let remove = git_in(root).args(["worktree", "remove", "--force"]).path(work);
+            if ctx.ask(&remove).is_some() {
+                ctx.say(format!("removed {}", work.display()));
+            } else {
+                ctx.failure(format!("couldn't remove {} — git worktree remove --force does", work.display()));
+            }
+        }
+        result
+    }
+
+    /// Checks `from` out in its own worktree at `work` (reused if it's there). The project's
+    /// folder inside the repo, which is the same folder in there.
+    fn checkout(&self, ctx: &mut Ctx, root: &Path, from: &str, work: &Path) -> Result<String, String> {
+        let git = || git_in(root);
+        let prefix = ctx
+            .ask(&git().args(["rev-parse", "--show-prefix"]))
+            .ok_or_else(|| format!("from = {from} needs a git repository"))?;
+        ctx.ask(&git().args(["rev-parse", "--verify", "--quiet", &format!("{from}^{{commit}}")]))
+            .ok_or_else(|| format!("no branch or commit {from} here"))?;
+        ctx.heading(format!("check out {from} → {}", config::pretty_path(work)));
+        if work.join(".git").exists() {
+            let update = || "could not update the build checkout".to_string();
+            ctx.must(&git_in(work).args(["checkout", "-q", "--detach", "--force", from]), update)?;
+            ctx.must(&git_in(work).args(["clean", "-q", "-fd"]), update)?;
+        } else {
+            let _ = std::fs::remove_dir_all(work);
+            let _ = ctx.ask(&git().args(["worktree", "prune"]));
+            if let Some(parent) = work.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let add = git().args(["worktree", "add", "-q", "--detach"]).path(work).arg(from);
+            ctx.must(&add, || "could not create the build checkout".into())?;
+        }
+        Ok(prefix)
+    }
+
+    fn build_checkout(&self, ctx: &mut Ctx, work: &Path, prefix: &str) -> Result<(), String> {
+        if work.join(".gitmodules").is_file() {
+            let update = git_in(work).args(["submodule", "update", "-q", "--init", "--recursive"]);
+            ctx.must(&update, || "could not fetch submodules".into())?;
+        }
+        if let Some(head) = ctx.ask(&git_in(work).args(["log", "-1", "--format=%h %s"])) {
+            ctx.say(format!("building {head}"));
+        }
+        let dir = work.join(prefix);
+        if !dir.is_dir() {
+            return Err(format!("no {prefix} in the checkout"));
+        }
+        let p = config::expand_tilde(self.artifact.trim());
+        let artifact = if p.is_absolute() { p } else { dir.join(p) };
+        self.build_and_ship(ctx, &dir, &artifact)
+    }
+
+    /// Builds in `dir`, uploads `artifact` and swaps it in, then restarts what's set up.
+    fn build_and_ship(&self, ctx: &mut Ctx, dir: &Path, artifact: &Path) -> Result<(), String> {
+        let build = self.build.trim();
+        if !build.is_empty() {
+            ctx.heading(format!("build · {build}"));
+            // Written by the user, so it's their shell's.
+            let mut c = ctx.shell.command(build);
+            c.current_dir(dir);
+            if runs_cross(build) {
+                c.env("CROSS_CONTAINER_OPTS", cross_container_opts());
+            }
+            let shell = ctx.shell.program.to_string_lossy().into_owned();
+            match ctx.spawn(c, &shell) {
+                e if e.ok() => {}
+                Exit::Killed => return Err("stopped".into()),
+                _ => return Err("build failed — nothing was copied".into()),
+            }
+        }
+        let Some(meta) = std::fs::metadata(artifact).ok().filter(|m| m.is_file()) else {
+            return Err(format!("no file at {} — check artifact in the deploy settings", artifact.display()));
+        };
+        ctx.heading(format!("copy {} → {}", human_size(meta.len()), self.host.trim()));
+        let file = std::fs::File::open(artifact).map_err(|e| format!("can't read {}: {e}", artifact.display()))?;
+        let mut upload = self.remote(&self.upload_script(), false).command();
+        upload.current_dir(&ctx.cwd);
+        match ctx.spawn_input(upload, "ssh", file) {
+            e if e.ok() => {}
+            Exit::Killed => return Err("stopped".into()),
+            _ => return Err(self.hint_ssh().into()),
+        }
+        ctx.heading(format!("swap in {}", self.remote_path));
+        let failed = format!("replacing failed{} — the binary there is the old one", self.hint_sudo());
+        self.on_remote(ctx, &self.replace_script(), true, failed)?;
+        self.restart(ctx, "the new binary is in place, D then u rolls back")?;
+        ctx.success("deployed");
+        Ok(())
+    }
+
+    /// Runs `script` on the host; a failure is `failed`.
+    fn on_remote(&self, ctx: &mut Ctx, script: &str, tty: bool, failed: String) -> Result<(), String> {
+        let mut c = self.remote(script, tty).command();
+        c.current_dir(&ctx.cwd);
+        match ctx.spawn(c, "ssh") {
+            e if e.ok() => Ok(()),
+            Exit::Killed => Err("stopped".into()),
+            _ => Err(failed),
+        }
+    }
+
+    fn restart(&self, ctx: &mut Ctx, after: &str) -> Result<(), String> {
         if let Some(svc) = self.unit() {
-            *out += &format!("step {}\n", quote_str(&format!("restart {svc}")));
-            *out += &format!(
-                "{} || fail {}\n",
-                self.remote(&self.service_script(&svc), true),
-                quote_str(&format!("{svc} isn't running — {after}"))
-            );
+            ctx.heading(format!("restart {svc}"));
+            self.on_remote(ctx, &self.service_script(&svc), true, format!("{svc} isn't running — {after}"))?;
         }
         let restart = self.restart.trim();
-        if restart.is_empty() {
-            return;
+        if !restart.is_empty() {
+            ctx.heading(format!("restart · {restart}"));
+            self.on_remote(ctx, restart, true, format!("restart failed — {after}"))?;
         }
-        *out += &format!("step {}\n", quote_str(&format!("restart · {restart}")));
-        *out +=
-            &format!("{} || fail {}\n", self.remote(restart, true), quote_str(&format!("restart failed — {after}")));
+        Ok(())
     }
+}
+
+/// git, working in `dir`.
+fn git_in(dir: &Path) -> Step {
+    Step::new("git").arg("-C").path(dir)
+}
+
+/// The ssh program; tests put a stand-in there.
+fn ssh_program() -> String {
+    #[cfg(test)]
+    if let Some(p) = tests::SSH.with(|s| s.borrow().clone()) {
+        return p;
+    }
+    "ssh".into()
 }
 
 impl Deploy {
@@ -432,27 +498,26 @@ fi
     }
 }
 
-const PRELUDE: &str = "step() { printf '\\033[1;36m── %s\\033[0m\\n' \"$1\"; }\n\
-fail() { printf '\\033[1;31m✘ %s\\033[0m\\n' \"$1\"; exit 1; }\n";
-
 /// cross mounts your cargo home into its container, config included, and settings made
 /// for this machine (an sccache wrapper, `linker = "clang"`, mold) break the build in
 /// there. The container sees an empty file in place of the config; yours isn't touched.
-const HIDE_CARGO_CONFIG: &str = r#"for f in config.toml config; do
-  [ ! -f "${CARGO_HOME:-$HOME/.cargo}/$f" ] || CROSS_CONTAINER_OPTS="${CROSS_CONTAINER_OPTS:+$CROSS_CONTAINER_OPTS }-v /dev/null:/cargo/$f:ro"
-done
-export CROSS_CONTAINER_OPTS
-"#;
+fn cross_container_opts() -> String {
+    let home = std::env::var_os("CARGO_HOME").map_or_else(|| config::home().join(".cargo"), PathBuf::from);
+    let mut opts = std::env::var("CROSS_CONTAINER_OPTS").unwrap_or_default();
+    for f in ["config.toml", "config"] {
+        if home.join(f).is_file() {
+            if !opts.is_empty() {
+                opts.push(' ');
+            }
+            opts.push_str(&format!("-v /dev/null:/cargo/{f}:ro"));
+        }
+    }
+    opts
+}
 
 /// Whether a build command calls `cross`, like `RUSTFLAGS=… cross build` or `npm ci && cross build`.
 fn runs_cross(build: &str) -> bool {
     build.split(|c: char| c.is_whitespace() || "&|;()".contains(c)).any(|w| w == "cross")
-}
-
-/// Where the script for a run is written, so the output pane shows a short command and
-/// you can read exactly what ran.
-pub fn script_file(root: &Path, name: &str, what: &str) -> PathBuf {
-    config::state_dir().join("deploy").join(format!("{}--{}-{what}.sh", path_key(root), file_safe(name)))
 }
 
 /// A target's name as part of a file name: anything odd becomes `-`.
@@ -461,10 +526,23 @@ fn file_safe(name: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     #[cfg(unix)]
+    use crate::run::testing::with_ctx;
+    #[cfg(unix)]
     use crate::testutil::stub;
+
+    thread_local! {
+        /// The ssh a test's deploy uses, in place of the real one.
+        pub static SSH: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    }
+
+    #[cfg(unix)]
+    fn use_ssh_stub(bin: &Path) {
+        stub(bin, "ssh", SSH_STUB);
+        SSH.with(|s| *s.borrow_mut() = Some(bin.join("ssh").to_string_lossy().into_owned()));
+    }
     #[cfg_attr(windows, allow(unused_imports))]
     use crate::testutil::{git, temp_dir};
     #[cfg_attr(windows, allow(unused_imports))]
@@ -497,9 +575,6 @@ mod tests {
         assert!(runs_cross("RUSTFLAGS='-C x' cross build --release"));
         assert!(runs_cross("npm ci&&cross build"));
         assert!(!runs_cross("cargo build && echo across"));
-        let root = Path::new("/x");
-        assert!(Deploy { build: "cross build".into(), ..pi() }.script(root, false).contains("CROSS_CONTAINER_OPTS"));
-        assert!(!pi().script(root, false).contains("CROSS_CONTAINER_OPTS"));
     }
 
     /// The remote half of `service` against stub systemctl/journalctl: creates the unit
@@ -571,32 +646,26 @@ mod tests {
     // Runs a sh script; Windows gets these once the script is Rust.
     #[cfg(unix)]
     #[test]
-    fn scripts_are_valid_sh() {
-        let root = Path::new("/home/u/proj");
-        let from = Deploy { from: "main".into(), ..pi() };
-        let cross = Deploy { build: "RUSTFLAGS=x cross build".into(), service: "myapp".into(), ..pi() };
-        for d in [
-            pi(),
-            from,
-            cross,
-            Deploy { sudo: false, interactive: true, build: String::new(), restart: String::new(), keep: 0, ..pi() },
-        ] {
-            assert!(sh_syntax_ok(&d.script(root, false)), "{}", d.script(root, false));
-            assert!(sh_syntax_ok(&d.script(root, true)), "{}", d.script(root, true));
-            assert!(sh_syntax_ok(&d.rollback_script()));
-            assert!(sh_syntax_ok(&d.backups_script()));
+    fn remote_scripts_are_valid_sh() {
+        let service = Deploy { service: "myapp".into(), ..pi() };
+        for d in [pi(), service, Deploy { sudo: false, interactive: true, restart: String::new(), keep: 0, ..pi() }] {
+            for script in [d.upload_script(), d.replace_script(), d.restore_script(), d.list_script()] {
+                assert!(sh_syntax_ok(&script), "{script}");
+            }
+            if let Some(unit) = d.unit() {
+                assert!(sh_syntax_ok(&d.service_script(&unit)));
+            }
         }
     }
 
-    /// Runs the remote half of a deploy and a rollback against a temp dir, with `ssh`
-    /// replaced by a stub that just runs the command locally.
-    // Runs a sh script; Windows gets these once the script is Rust.
+    /// Runs a deploy and a rollback against a temp dir, with `ssh` replaced by a stub that
+    /// just runs the command locally (so it needs a Unix machine, like the real other end).
     #[cfg(unix)]
     #[test]
     fn replaces_with_backup_and_rolls_back() {
         let base = temp_dir("deploy-test");
         let bin = base.join("bin");
-        stub(&bin, "ssh", SSH_STUB);
+        use_ssh_stub(&bin);
 
         let remote = base.join("remote/app");
         fs::create_dir_all(remote.parent().unwrap()).unwrap();
@@ -613,16 +682,10 @@ mod tests {
             keep: 1,
             ..Deploy::default()
         };
-        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-        let run = |script: String| {
-            let out = Command::new("sh").arg("-c").arg(script).current_dir(&base).env("PATH", &path).output().unwrap();
-            assert!(
-                out.status.success(),
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-            String::from_utf8_lossy(&out.stdout).into_owned()
+        let run = |what: Run| {
+            let (result, out) = with_ctx(&base, |ctx| d.run(ctx, &base, false, what));
+            assert!(result.is_ok(), "{result:?}\n{out}");
+            out
         };
         let backups = || {
             let mut b: Vec<_> = fs::read_dir(remote.parent().unwrap())
@@ -634,7 +697,7 @@ mod tests {
             b
         };
 
-        let out = run(d.script(&base, false));
+        let out = run(Run::Deploy);
         assert!(out.contains("deployed"), "{out}");
         assert_eq!(fs::read_to_string(&remote).unwrap(), "new");
         let mode = Command::new("stat").args(["-c", "%a"]).arg(&remote).output().unwrap();
@@ -642,20 +705,20 @@ mod tests {
         assert_eq!(backups().len(), 1);
 
         // Same build again: nothing replaced, no extra backup.
-        assert!(run(d.script(&base, false)).contains("already this build"));
+        assert!(run(Run::Deploy).contains("already this build"));
         assert_eq!(backups().len(), 1);
 
         // A newer build: the backup of "new" stays, the older one goes (keep = 1).
         fs::write(base.join("artifact"), "newer").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        run(d.script(&base, false));
+        run(Run::Deploy);
         assert_eq!(fs::read_to_string(&remote).unwrap(), "newer");
         assert_eq!(backups().len(), 1);
 
-        run(d.rollback_script());
+        run(Run::Rollback);
         assert_eq!(fs::read_to_string(&remote).unwrap(), "new");
         assert!(backups().is_empty());
-        assert!(run(d.backups_script()).contains("app"));
+        assert!(run(Run::Backups).contains("app"));
 
         let _ = fs::remove_dir_all(&base);
     }
@@ -663,7 +726,6 @@ mod tests {
     /// `from = "main"` while another branch with uncommitted edits is checked out, in a
     /// project that's a subfolder of its repo: main's build goes out, the checkout is
     /// removed afterwards (or kept when asked), the working copy stays as it was.
-    // Runs a sh script; Windows gets these once the script is Rust.
     #[cfg(unix)]
     #[test]
     fn from_builds_the_branch_in_a_separate_checkout() {
@@ -671,7 +733,7 @@ mod tests {
         let (bin, repo, work) = (base.join("bin"), base.join("repo"), base.join("cache/work"));
         let proj = repo.join("app");
         fs::create_dir_all(&proj).unwrap();
-        stub(&bin, "ssh", SSH_STUB);
+        use_ssh_stub(&bin);
         let git = |args: &[&str]| drop(git(&repo, args));
         git(&["init", "-q", "-b", "main"]);
         fs::write(proj.join("version.txt"), "main").unwrap();
@@ -693,20 +755,21 @@ mod tests {
             artifact: "out/app".into(),
             ..Deploy::default()
         };
-        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-        let run = |script: String| {
-            let out = Command::new("sh").arg("-c").arg(script).current_dir(&proj).env("PATH", &path).output().unwrap();
-            let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-            (out.status.success(), text)
+        let run = |d: &Deploy, keep: bool| {
+            let (result, out) = with_ctx(&proj, |ctx| d.run_in(ctx, &proj, &work, keep, Run::Deploy));
+            match result {
+                Ok(()) => (true, out),
+                Err(e) => (false, format!("{out}{e}")),
+            }
         };
 
-        let (ok, out) = run(d.script_in(&proj, &work, false));
+        let (ok, out) = run(&d, false);
         let deployed = fs::read_to_string(&remote).ok();
         let left_behind = work.exists();
-        let (ok_kept, out_kept) = run(d.script_in(&proj, &work, true));
+        let (ok_kept, out_kept) = run(&d, true);
         let kept = work.join("app/out/app").exists();
         // A missing branch fails before anything is built or copied.
-        let (ok_missing, out_missing) = run(Deploy { from: "nope".into(), ..d.clone() }.script_in(&proj, &work, false));
+        let (ok_missing, out_missing) = run(&Deploy { from: "nope".into(), ..d.clone() }, false);
         let wc = fs::read_to_string(proj.join("version.txt")).unwrap();
         let _ = fs::remove_dir_all(&base);
 

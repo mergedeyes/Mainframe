@@ -301,8 +301,8 @@ pub fn quote(p: &Path) -> String {
     quote_str(&p.to_string_lossy())
 }
 
-/// POSIX quoting, for Mainframe's own sh scripts (`Cmd::Sh`). What the user's shell runs
-/// is quoted by `Shell::quote`.
+/// POSIX quoting, for sh that runs on Unix: the deploy steps on the other end, the sudo
+/// install of a .desktop entry. What the user's shell runs is quoted by `Shell::quote`.
 pub fn quote_str(s: &str) -> String {
     crate::shell::posix_quote(s)
 }

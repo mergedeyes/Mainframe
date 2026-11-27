@@ -168,9 +168,22 @@ impl<'a> Ctx<'a> {
     }
 
     /// Starts `command` (its folder already set) and waits for it, its output going to the sink.
-    pub fn spawn(&mut self, mut command: Command, program: &str) -> Exit {
+    pub fn spawn(&mut self, command: Command, program: &str) -> Exit {
+        self.spawn_with(command, program, None)
+    }
+
+    /// `spawn`, reading `input` as its stdin (an upload through ssh).
+    pub fn spawn_input(&mut self, command: Command, program: &str, input: std::fs::File) -> Exit {
+        self.spawn_with(command, program, Some(input))
+    }
+
+    fn spawn_with(&mut self, mut command: Command, program: &str, input: Option<std::fs::File>) -> Exit {
         if self.stopped() {
             return Exit::Killed;
+        }
+        let has_input = input.is_some();
+        if let Some(f) = input {
+            command.stdin(f);
         }
         let tx = match &mut self.sink {
             Sink::Terminal { capture } => {
@@ -191,8 +204,10 @@ impl<'a> Ctx<'a> {
             }
             Sink::Pane(tx) => tx.clone(),
         };
+        if !has_input {
+            command.stdin(Stdio::null());
+        }
         command
-            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // stdout isn't a tty, so ask tools to keep their colors anyway.
@@ -378,6 +393,7 @@ pub fn builtin(b: &Builtin, ctx: &mut Ctx) -> Result<(), String> {
         Builtin::FollowPages { repo, live } => crate::blog::follow_pages(ctx, repo, live),
         Builtin::InstallFile { src, dest } => crate::install::install_file(ctx, src, dest),
         Builtin::Delete(paths) => crate::cleanup::delete(ctx, paths),
+        Builtin::Deploy { target, root, keep_build, run } => target.run(ctx, root, *keep_build, *run),
         Builtin::Cleanup { jobs, what, expected } => crate::cleanup::clean(ctx, jobs, what, *expected),
         Builtin::RemoveFile(p) => {
             let pretty = crate::config::pretty_path(p);
@@ -399,10 +415,16 @@ pub mod testing {
 
     /// Runs `cmd` in `cwd` to the end: whether it succeeded, and its output as plain text.
     pub fn run_in(cmd: &Cmd, cwd: &Path) -> (bool, String) {
+        let (exit, out) = with_ctx(cwd, |ctx| run(cmd, ctx));
+        (exit.ok(), out)
+    }
+
+    /// Calls `f` with a context in `cwd`; what it returns, and what it printed as plain text.
+    pub fn with_ctx<T>(cwd: &Path, f: impl FnOnce(&mut Ctx) -> T) -> (T, String) {
         let control = Control::default();
         let (tx, rx) = mpsc::channel();
         let mut ctx = Ctx::new(cwd, Shell::default(), Sink::Pane(tx), &control);
-        let exit = run(cmd, &mut ctx);
+        let result = f(&mut ctx);
         drop(ctx);
         let mut out = String::new();
         for msg in rx {
@@ -411,6 +433,6 @@ pub mod testing {
                 out.push('\n');
             }
         }
-        (exit.ok(), out)
+        (result, out)
     }
 }
