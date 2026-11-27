@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{App, Confirmed, Level, Mode, files::trash_cmd, post_editor::Part};
+use super::{App, Confirmed, Level, Mode, post_editor::Part};
 use crate::{
     blog::{self, Change, Post, State},
     filter_list::{self, FilterList, Match},
@@ -238,7 +238,7 @@ impl App {
 
     fn confirm_delete_post(&mut self) {
         let Some((_, post)) = self.picked_post() else { return };
-        let verb = if trash_cmd().is_some() { "Trash" } else { "Permanently delete" };
+        let verb = if crate::platform::trash_available() { "Trash" } else { "Permanently delete" };
         self.mode =
             Mode::Confirm { msg: format!("{verb} {}? [y/N]", post.rel()), action: Confirmed::BlogDelete(post.path) };
     }

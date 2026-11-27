@@ -252,7 +252,4 @@ pub fn quote_str(s: &str) -> String {
     }
 }
 
-/// Finds an executable on $PATH.
-pub fn which(name: &str) -> Option<PathBuf> {
-    env::split_paths(&env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file())
-}
+pub use crate::platform::which;

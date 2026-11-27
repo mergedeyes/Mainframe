@@ -3,11 +3,11 @@
 //! lines are todos, everything else is a note line; the file stays editable by hand.
 
 use std::{
-    env, fs, io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
-use crate::config::{home, path_key};
+use crate::config::path_key;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
@@ -107,11 +107,7 @@ pub fn open_count(root: &Path) -> usize {
 }
 
 pub fn dir() -> PathBuf {
-    env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".local/share"))
-        .join("mainframe")
-        .join("notes")
+    crate::platform::data_dir().join("notes")
 }
 
 /// `~/Projekte/Games/bash_emu` → `Projekte%2FGames%2Fbash_emu.md`.
@@ -147,7 +143,7 @@ mod tests {
 
     #[test]
     fn file_names_stay_unique() {
-        let h = home();
+        let h = crate::config::home();
         assert_ne!(file_for(&h.join("a%2Fb")), file_for(&h.join("a/b")));
         assert!(file_for(&h.join("Projekte/Mainframe")).ends_with("Projekte%2FMainframe.md"));
     }

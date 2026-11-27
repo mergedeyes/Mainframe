@@ -77,7 +77,7 @@ fn plan(root: &Path, src: &Path, text: &str, bin: &str, bin_dest: &Path) -> Desk
     };
     DesktopPlan {
         src: src.to_path_buf(),
-        system: !writable(&target),
+        system: !crate::platform::writable(&target),
         symlink: symlink && !linked,
         target,
         status,
@@ -173,17 +173,6 @@ fn quote_exec(path: &str) -> String {
 
 fn basename(p: &str) -> &str {
     p.rsplit('/').next().unwrap_or(p)
-}
-
-/// Whether we may create or replace `path`: the file itself if it exists,
-/// otherwise the nearest existing parent directory.
-fn writable(path: &Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let existing = path.ancestors().find(|p| p.exists()).unwrap_or(Path::new("/"));
-    // Replacing a file also works through a writable directory, but sudo-owned
-    // files in a user dir are rare; checking the file itself keeps it simple.
-    let Ok(c) = std::ffi::CString::new(existing.as_os_str().as_bytes()) else { return false };
-    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
 }
 
 /// User applications dir first, then the system ones from $XDG_DATA_DIRS.

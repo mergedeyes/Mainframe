@@ -17,6 +17,7 @@ mod line;
 mod locate;
 mod markdown;
 mod notes;
+mod platform;
 mod proc;
 mod project;
 mod projects;
@@ -35,7 +36,7 @@ use std::{
     env,
     io::{self, Write},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Stdio,
     time::Duration,
 };
 
@@ -115,8 +116,8 @@ fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground) -> Result<Opt
         println!("\x1b[2m$ {}\x1b[0m", fg.cmd);
     }
 
-    let mut command = Command::new("sh");
-    command.arg("-c").arg(&fg.cmd).current_dir(&fg.cwd);
+    let mut command = platform::shell(&fg.cmd);
+    command.current_dir(&fg.cwd);
     let (status, output) = if fg.cd_to_output {
         // Pickers like fzf draw on /dev/tty, so piping stdout doesn't disturb them.
         match command.stderr(Stdio::inherit()).output() {

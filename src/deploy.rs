@@ -463,10 +463,15 @@ fn file_safe(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{git, stub, temp_dir};
+    #[cfg(unix)]
+    use crate::testutil::stub;
+    #[cfg_attr(windows, allow(unused_imports))]
+    use crate::testutil::{git, temp_dir};
+    #[cfg_attr(windows, allow(unused_imports))]
     use std::{fs, process::Command};
 
     /// Drops ssh's options and the host, then runs the remote command through sh like sshd does.
+    #[cfg(unix)]
     const SSH_STUB: &str = "#!/bin/sh\nwhile [ $# -gt 1 ]; do case $1 in -o) shift 2;; -t) shift;; *) shift; break;; esac; done\nexec sh -c \"$*\"\n";
 
     fn pi() -> Deploy {
@@ -482,6 +487,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn sh_syntax_ok(script: &str) -> bool {
         Command::new("sh").args(["-n", "-c", script]).status().unwrap().success()
     }
@@ -498,6 +504,8 @@ mod tests {
 
     /// The remote half of `service` against stub systemctl/journalctl: creates the unit
     /// when it's missing, only restarts it after that, fails when it doesn't come up.
+    // Runs a sh script; Windows gets these once the script is Rust.
+    #[cfg(unix)]
     #[test]
     fn service_is_created_once_then_restarted() {
         let base = temp_dir("service-test");
@@ -560,6 +568,8 @@ mod tests {
         assert!(pi().problem().is_none());
     }
 
+    // Runs a sh script; Windows gets these once the script is Rust.
+    #[cfg(unix)]
     #[test]
     fn scripts_are_valid_sh() {
         let root = Path::new("/home/u/proj");
@@ -580,6 +590,8 @@ mod tests {
 
     /// Runs the remote half of a deploy and a rollback against a temp dir, with `ssh`
     /// replaced by a stub that just runs the command locally.
+    // Runs a sh script; Windows gets these once the script is Rust.
+    #[cfg(unix)]
     #[test]
     fn replaces_with_backup_and_rolls_back() {
         let base = temp_dir("deploy-test");
@@ -651,6 +663,8 @@ mod tests {
     /// `from = "main"` while another branch with uncommitted edits is checked out, in a
     /// project that's a subfolder of its repo: main's build goes out, the checkout is
     /// removed afterwards (or kept when asked), the working copy stays as it was.
+    // Runs a sh script; Windows gets these once the script is Rust.
+    #[cfg(unix)]
     #[test]
     fn from_builds_the_branch_in_a_separate_checkout() {
         let base = temp_dir("deploy-from");

@@ -3,13 +3,12 @@
 use std::{
     collections::BTreeSet,
     env, fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
 };
 
 use crate::config::{expand_tilde, pretty_path};
-use crate::proc;
+use crate::{platform, proc};
 
 const MAX_ITEMS: usize = 500;
 
@@ -245,9 +244,9 @@ fn path_programs() -> Vec<String> {
         let Ok(rd) = fs::read_dir(dir) else { continue };
         for de in rd.flatten() {
             // fs::metadata follows symlinks (rustup's cargo, etc. are links).
-            let exec = fs::metadata(de.path()).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
-            if exec {
-                set.insert(de.file_name().to_string_lossy().into_owned());
+            let path = de.path();
+            if fs::metadata(&path).is_ok_and(|m| platform::is_executable(&path, &m)) {
+                set.insert(platform::command_name(&de.file_name().to_string_lossy()).to_string());
             }
         }
     }
