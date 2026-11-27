@@ -55,6 +55,10 @@ keep_deploy_builds = false
 # those whose work is in the default branch (origin/main); the others are kept.
 prune_gone_branches = false
 
+# A Jekyll blog repo: inside it (or a worktree of it), `L` lists its drafts and posts,
+# writes new ones, publishes and pushes them. Empty: off.
+blog_repo = ""
+
 # Override or add run commands per file extension (used by `r` / `R`).
 [runners]
 # py = "python3 {file}"
@@ -101,6 +105,7 @@ pub struct Config {
     pub notify_after: u64,
     pub keep_deploy_builds: bool,
     pub prune_gone_branches: bool,
+    pub blog_repo: String,
     pub runners: HashMap<String, String>,
     pub actions: Vec<Action>,
 }
@@ -119,6 +124,7 @@ impl Default for Config {
             notify_after: 10,
             keep_deploy_builds: false,
             prune_gone_branches: false,
+            blog_repo: String::new(),
             runners: HashMap::new(),
             actions: Vec::new(),
         }
@@ -179,7 +185,7 @@ impl Config {
 /// The settings at the top of config.toml. TOML puts every key below a `[section]`
 /// header into that section, and a section can't be closed. None of these names means
 /// anything inside a section, so wherever one ends up, it's moved back to the top.
-const TOP_LEVEL: [&str; 11] = [
+const TOP_LEVEL: [&str; 12] = [
     "editor",
     "vscode",
     "install_dir",
@@ -191,6 +197,7 @@ const TOP_LEVEL: [&str; 11] = [
     "notify_after",
     "keep_deploy_builds",
     "prune_gone_branches",
+    "blog_repo",
 ];
 
 /// Reads config.toml with the settings wherever they are. Errors start with the line.

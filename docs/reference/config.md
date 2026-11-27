@@ -35,6 +35,7 @@ explained.
 | `notify_after` | `10` | ring the bell and send a desktop notification when a task that ran this many seconds finishes; `0` turns it off |
 | `prune_gone_branches` | `false` | `g f` also deletes local branches whose remote branch was deleted, when their work is in `origin/main` (also rebased or squashed); see [Branches deleted on the remote](../guides/git.md#branches-deleted-on-the-remote) |
 | `keep_deploy_builds` | `false` | keep the build checkout of deploys with `from` for faster rebuilds; see [Deploying a branch](../guides/install-and-deploy.md#deploying-a-branch-not-your-work-in-progress) |
+| `blog_repo` | `""` | a Jekyll blog repo; inside it, or a worktree of it, `L` lists its drafts and posts; empty turns it off; see [Blog](../guides/blog.md) |
 
 ### Runners
 

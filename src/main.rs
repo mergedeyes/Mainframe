@@ -1,5 +1,6 @@
 mod ansi;
 mod app;
+mod blog;
 mod browser;
 mod cleanup;
 mod complete;

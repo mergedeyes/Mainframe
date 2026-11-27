@@ -71,6 +71,10 @@ pub enum FormKind {
     },
     /// A new project folder (`J`, then `^G`).
     NewProject,
+    /// A new post in the blog at `root` (`L`, then `a`).
+    BlogPost {
+        root: std::path::PathBuf,
+    },
 }
 
 pub struct Form {

@@ -216,6 +216,11 @@ impl App {
                             self.mode = Mode::Form(form);
                         }
                     }
+                    FormKind::BlogPost { .. } => {
+                        if !self.submit_blog_form(&form) {
+                            self.mode = Mode::Form(form);
+                        }
+                    }
                     FormKind::GhRepoCreate => {
                         let source = config::expand_tilde(form.get("source"));
                         if !source.is_dir() {

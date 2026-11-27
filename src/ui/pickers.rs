@@ -1,4 +1,5 @@
-//! The pickers that filter as you type: `^P` files, `J` projects, `T` tasks, `g o` branches.
+//! The pickers that filter as you type: `^P` files, `J` projects, `T` tasks, `g o` branches,
+//! `L` blog posts.
 
 use ratatui::{
     Frame,
@@ -9,7 +10,8 @@ use ratatui::{
 };
 
 use crate::{
-    app::{BranchPicker, FileFinder, ProjectPicker, TaskPicker},
+    app::{BlogPicker, BranchPicker, FileFinder, ProjectPicker, TaskPicker},
+    blog::State,
     config::pretty_path,
     git, install,
 };
@@ -192,4 +194,64 @@ fn branch_remote(b: &git::Branch) -> (String, Color) {
             (parts.join(", "), Color::Yellow)
         }
     }
+}
+
+pub(super) fn draw_blog_picker(f: &mut Frame, picker: &mut BlogPicker, area: Rect) {
+    let rect = popup(area, 100, picker.list.items.len().max(3) as u16 + 4);
+    let title = Line::from(format!(" blog · {} ", pretty_path(&picker.root)).bold());
+    let keys = if picker.filtering {
+        " type to filter · Enter keep · Esc clear "
+    } else {
+        " ⏎ edit · a new · p publish · P push · u unpublish · d trash · / filter · Esc close "
+    };
+    let inner = popup_pane(f, rect, title, keys);
+    let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
+    if picker.filtering {
+        filter_line(f, &picker.list.filter, Some(picker.list.total), input);
+    } else if picker.list.filter.is_empty() {
+        let (drafts, posts) = picker.list.items.iter().fold((0, 0), |(d, p), post| match post.state {
+            State::Draft => (d + 1, p),
+            State::Post => (d, p + 1),
+        });
+        f.render_widget(Line::from(format!(" {drafts} drafts · {posts} posts · / filters")).fg(DIM), input);
+    } else {
+        f.render_widget(
+            Line::from(vec![
+                Span::styled(" › ", Style::new().fg(DIM)),
+                Span::raw(picker.list.filter.text.clone()),
+                Span::styled("   Esc shows all", Style::new().fg(DIM)),
+            ]),
+            input,
+        );
+    }
+
+    if picker.list.items.is_empty() {
+        f.render_widget(
+            Line::from(vec![
+                Span::styled("  no drafts or posts yet · ", Style::new().fg(DIM)),
+                Span::styled("a", Style::new().fg(ACCENT).bold()),
+                Span::styled(" writes one", Style::new().fg(DIM)),
+            ]),
+            list_area,
+        );
+        return;
+    }
+    let items: Vec<ListItem> = picker
+        .list
+        .visible
+        .iter()
+        .map(|&i| {
+            let p = &picker.list.items[i];
+            let (state, color) = match p.state {
+                State::Draft => ("draft", Color::Yellow),
+                State::Post => ("post", Color::Green),
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{state:<6}"), Style::new().fg(color)),
+                Span::styled(format!("{:<12}", p.date.as_deref().unwrap_or("")), Style::new().fg(DIM)),
+                Span::styled(p.title.clone(), Style::new().bold()),
+            ]))
+        })
+        .collect();
+    f.render_stateful_widget(list(items), list_area, &mut picker.list.state);
 }

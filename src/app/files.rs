@@ -176,7 +176,7 @@ fn unique_name(path: &Path) -> PathBuf {
         .unwrap()
 }
 
-fn trash_cmd() -> Option<&'static str> {
+pub(super) fn trash_cmd() -> Option<&'static str> {
     if project::which("gio").is_some() {
         Some("gio trash --")
     } else if project::which("trash-put").is_some() {

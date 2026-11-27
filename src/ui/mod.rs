@@ -38,7 +38,7 @@ use self::{
     installer::{draw_desktop_review, draw_install},
     notes_view::draw_notes,
     output::draw_output,
-    pickers::{draw_branch_picker, draw_file_finder, draw_project_picker, draw_task_picker},
+    pickers::{draw_blog_picker, draw_branch_picker, draw_file_finder, draw_project_picker, draw_task_picker},
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -81,7 +81,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_footer(f, app, footer);
 
     match &mut app.mode {
-        Mode::Help => draw_help(f, f.area()),
+        Mode::Help => draw_help(f, f.area(), app.blog_root.is_some()),
         Mode::GitMenu => draw_git_menu(f, app.git.as_ref(), f.area()),
         Mode::Install(picker) => draw_install(f, picker, f.area()),
         Mode::Tasks(picker) => draw_task_picker(f, picker, f.area()),
@@ -93,6 +93,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::DesktopReview(review) => draw_desktop_review(f, review, f.area()),
         Mode::Deploy(picker) => draw_deploy(f, picker, f.area()),
         Mode::Cleanup(picker) => draw_cleanup(f, picker, f.area()),
+        Mode::Blog(picker) => draw_blog_picker(f, picker, f.area()),
         _ => {}
     }
 }
