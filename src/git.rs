@@ -9,6 +9,7 @@ use std::{
 use ratatui::style::Color;
 
 use crate::{
+    cmd::{Cmd, Step},
     form::{Field, Form, FormKind},
     proc,
     project::quote_str,
@@ -247,19 +248,19 @@ pub fn branch_name(input: &str) -> String {
 
 /// `git push` for a local branch other than (or the same as) the checked-out one, without
 /// switching to it: to the remote it tracks, or to origin with upstream set when it has none.
-pub fn push_branch_cmd(cwd: &Path, branch: &str) -> Result<String, String> {
+pub fn push_branch_cmd(cwd: &Path, branch: &str) -> Result<Cmd, String> {
     if git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_none() {
         return Err(format!("no local branch {branch}"));
     }
     let config = |key: &str| git_text(cwd, &["config", &format!("branch.{branch}.{key}")]);
-    let b = quote_str(branch);
+    let push = Step::git().arg("push");
     Ok(match (config("remote"), config("merge")) {
         // "." tracks a local branch; pushing there would only move that branch.
         (Some(remote), Some(merge)) if remote != "." => {
             let to = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
-            format!("{GIT} push {} {b}:{}", quote_str(&remote), quote_str(to))
+            push.arg(remote).arg(format!("{branch}:{to}")).into()
         }
-        _ => format!("{GIT} push -u origin {b}"),
+        _ => push.args(["-u", "origin", branch]).into(),
     })
 }
 
@@ -423,12 +424,12 @@ pub fn behind_upstream(dir: &Path) -> Option<(String, String, usize)> {
 /// Work counts as in `base` when the branch's commits are, or when merging the branch into
 /// `base` wouldn't change a file: that's a branch rebased or squashed on the way in, whose
 /// commits `base` has under other ids. A merge with conflicts keeps the branch.
-pub fn fetch_cmd(prune_local: bool, base: Option<&str>) -> String {
-    let fetch = format!("{GIT} fetch --all --prune");
+pub fn fetch_cmd(prune_local: bool, base: Option<&str>) -> Cmd {
     if !prune_local {
-        return fetch;
+        return Step::git().args(["fetch", "--all", "--prune"]).into();
     }
-    format!(
+    let fetch = format!("{GIT} fetch --all --prune");
+    Cmd::Sh(format!(
         "{fetch} && base={} && \
          in_base() {{ t=$(git merge-tree --write-tree --no-messages \"$base\" \"$1\" 2>/dev/null) && [ \"$t\" = \"$(git rev-parse \"$base^{{tree}}\")\" ]; }} && \
          git for-each-ref --format='%(if:equals=gone)%(upstream:track,nobracket)%(then)%(refname:short)%(end)' refs/heads \
@@ -437,7 +438,7 @@ pub fn fetch_cmd(prune_local: bool, base: Option<&str>) -> String {
          elif in_base \"$b\"; then git branch -D \"$b\" && echo \"  (rebased or squashed: its changes are in $base)\"; \
          else echo \"kept $b: its remote branch is gone, but it isn't merged into $base\"; fi; done",
         quote_str(base.unwrap_or("HEAD"))
-    )
+    ))
 }
 
 /// `git` with colors forced on, since the output pane isn't a tty.
@@ -546,32 +547,30 @@ pub fn gh_repo_form(source: &Path) -> Result<Form, String> {
     })
 }
 
-/// The shell command the form currently describes; runs from `source`.
-pub fn gh_repo_create_cmd(form: &Form) -> String {
-    let q = crate::project::quote_str;
+/// What the form currently describes; runs from `source`.
+pub fn gh_repo_create_cmd(form: &Form) -> Cmd {
     let source = crate::config::expand_tilde(form.get("source"));
     let owner = form.get("owner").trim();
     let name = form.get("name").trim();
     let repo = if owner.is_empty() { name.to_string() } else { format!("{owner}/{name}") };
 
-    let mut cmd = String::new();
+    let mut steps = Vec::new();
     if git(&source, &["rev-parse", "--git-dir"]).is_none() {
-        cmd.push_str("git init && git add -A && git commit -m 'Initial commit' && ");
+        steps.push(Step::words("git init"));
+        steps.push(Step::words("git add -A"));
+        steps.push(Step::words("git commit -m").arg("Initial commit"));
     }
-    cmd.push_str(&format!(
-        "gh repo create {} --{} --source=. --remote={}",
-        q(&repo),
-        form.get("visibility"),
-        q(form.get("remote"))
-    ));
+    let mut gh = Step::words("gh repo create").arg(repo).arg(format!("--{}", form.get("visibility")));
+    gh = gh.arg("--source=.").arg(format!("--remote={}", form.get("remote")));
     let desc = form.get("description").trim();
     if !desc.is_empty() {
-        cmd.push_str(&format!(" --description {}", q(desc)));
+        gh = gh.args(["--description", desc]);
     }
     if form.get("push") == "yes" {
-        cmd.push_str(" --push");
+        gh = gh.arg("--push");
     }
-    cmd
+    steps.push(gh);
+    Cmd::Steps(steps)
 }
 
 #[cfg(test)]
@@ -608,11 +607,10 @@ mod branch_name_tests {
 mod push_tests {
     #![cfg_attr(windows, allow(unused_imports))]
     use super::*;
+    use crate::shell::Shell;
     use crate::testutil::{git as test_git, temp_dir};
 
     /// Pushing another branch leaves the checkout alone and lands on the remote.
-    // Runs a sh script; Windows gets these once the script is Rust.
-    #[cfg(unix)]
     #[test]
     fn pushes_a_branch_that_is_not_checked_out() {
         let base = temp_dir("push");
@@ -629,15 +627,15 @@ mod push_tests {
 
         assert_eq!(local_branches(&repo).len(), 2);
         assert!(push_branch_cmd(&repo, "nope").is_err());
-        let cmd = push_branch_cmd(&repo, "feature").unwrap().replace(GIT, "git");
-        assert_eq!(cmd, "git push -u origin feature");
-        let ok = Command::new("sh").arg("-c").arg(&cmd).current_dir(&repo).output().unwrap().status.success();
+        let cmd = push_branch_cmd(&repo, "feature").unwrap();
+        assert_eq!(cmd.display(&Shell::sh()), "git push -u origin feature");
+        let (ok, _) = cmd.run_in(&repo);
 
         let head = git(&repo, &["branch", "--show-current"]).unwrap();
         let on_remote = git(&remote, &["rev-parse", "feature"]).unwrap();
         let local = git(&repo, &["rev-parse", "feature"]).unwrap();
         // Now it tracks origin/feature, so the next push goes there by name.
-        let again = push_branch_cmd(&repo, "feature").unwrap().replace(GIT, "git");
+        let again = push_branch_cmd(&repo, "feature").unwrap().display(&Shell::sh());
         std::fs::remove_dir_all(&base).unwrap();
 
         assert!(ok);
@@ -779,15 +777,15 @@ mod branch_tests {
         commit(&repo, "later", "2026-02-03T10:00:00");
         run(&repo, &["push", "-q", "origin", "main", ":merged", ":rebased", ":squashed", ":unmerged", ":conflict"]);
         run(&repo, &["reset", "-q", "--hard", &start]);
-        let sh = |cmd: String| {
-            let out = Command::new("sh").arg("-c").arg(&cmd).env("LC_ALL", "C").current_dir(&repo).output().unwrap();
-            assert!(out.status.success(), "{cmd}: {}", String::from_utf8_lossy(&out.stderr));
-            String::from_utf8_lossy(&out.stdout).into_owned()
+        let run = |cmd: Cmd| {
+            let (ok, out) = cmd.run_in(&repo);
+            assert!(ok, "{cmd:?}: {out}");
+            out
         };
 
-        sh(fetch_cmd(false, Some("origin/main")).replace(GIT, "git"));
+        run(fetch_cmd(false, Some("origin/main")));
         let after_plain = local_branches(&repo);
-        let out = sh(fetch_cmd(true, Some("origin/main")).replace(GIT, "git"));
+        let out = run(fetch_cmd(true, Some("origin/main")));
         let after_prune = local_branches(&repo);
         std::fs::remove_dir_all(&base).unwrap();
 

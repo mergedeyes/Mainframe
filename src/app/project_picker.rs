@@ -80,7 +80,7 @@ impl App {
             }
             Pick::Notes => self.open_notes(e.path, e.name),
             Pick::VsCode => {
-                self.spawn_detached(&format!("{} {}", self.config.vscode, crate::project::quote(&e.path)));
+                self.spawn_detached(super::actions::vscode(&self.config.vscode).path(&e.path));
                 self.set_status(format!("opened {} in VS Code", e.name), Level::Ok);
             }
             Pick::Preset => self.confirm_preset(e.path),

@@ -110,7 +110,7 @@ pub(super) fn draw_task_picker(f: &mut Frame, picker: &mut TaskPicker, area: Rec
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{:<8}", t.group), Style::new().fg(Color::Yellow)),
                 Span::styled(format!("{:<name_w$}  ", truncate(&t.name, name_w)), Style::new().bold()),
-                Span::styled(t.cmd.clone(), Style::new().fg(DIM)),
+                Span::styled(t.cmd.display(&picker.shell), Style::new().fg(DIM)),
             ]))
         })
         .collect();

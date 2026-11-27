@@ -158,7 +158,7 @@ impl App {
         if let Err(e) = written {
             return self.set_status(format!("can't write {}: {e}", config::pretty_path(&file)), Level::Err);
         }
-        let plan = Plan { cmd: format!("sh {}", quote(&file)), cwd: root };
+        let plan = Plan { cmd: crate::cmd::Cmd::Sh(format!("sh {}", quote(&file))), cwd: root };
         let label = if chosen.len() == 1 { format!("clean {what}") } else { format!("clean {} things", chosen.len()) };
         let sized = match size {
             Some(u) => format!("{what} ({})", u.long()),

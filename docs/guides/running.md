@@ -35,7 +35,9 @@ package.json scripts, make targets and just recipes. Type to filter,
 
 ## Any command
 
-`:` runs a shell command in the current folder, with Tab completing
+`:` runs a command in your shell (`sh`, or PowerShell on Windows; the
+[`shell`](../reference/config.md#which-shell-runs-what) option picks
+another) in the current folder, with Tab completing
 programs and paths. ↑ and ↓ go through the commands you ran before; type the
 start of one first to see only those. `!` opens your shell in the current
 folder; leave it with `exit` to come back.

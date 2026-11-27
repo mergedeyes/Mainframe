@@ -7,10 +7,11 @@ use super::{
     files::{describe, run_quiet},
 };
 use crate::{
+    cmd::{Cmd, Step},
     config,
     form::{FormEvent, FormKind},
-    git::{self, GIT},
-    project::{self, Plan, quote, quote_str},
+    git,
+    project::{self, Plan},
     release,
 };
 
@@ -48,9 +49,11 @@ impl App {
             self.browser.cd(main.clone());
             self.invalidate();
         }
-        let force = if force { " --force" } else { "" };
-        let cmd = format!("{GIT} worktree remove{force} {}", quote(path));
-        self.start_task("git worktree remove".into(), Plan { cmd, cwd: main });
+        let mut step = Step::git().args(["worktree", "remove"]);
+        if force {
+            step = step.arg("--force");
+        }
+        self.start_task("git worktree remove".into(), Plan { cmd: step.path(path).into(), cwd: main });
     }
 
     /// s / u: stages or unstages the marked entries (or the selection) in place.
@@ -63,14 +66,15 @@ impl App {
         if paths.is_empty() {
             return;
         }
-        let files = paths.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ");
-        let cmd = if add {
-            format!("git add -A -- {files}")
+        let files = paths.iter().map(|p| p.to_string_lossy().into_owned());
+        let res = if add {
+            run_quiet(&Step::words("git add -A --").args(files))
         } else {
             // Before the first commit there's no HEAD to restore from.
-            format!("git restore --staged -- {files} 2>/dev/null || git rm -r -q --cached -- {files}")
+            run_quiet(&Step::words("git restore --staged --").args(files.clone()))
+                .or_else(|_| run_quiet(&Step::words("git rm -r -q --cached --").args(files)))
         };
-        match run_quiet(&cmd) {
+        match res {
             Ok(()) => {
                 let verb = if add { "staged" } else { "unstaged" };
                 self.set_status(format!("{verb} {}", describe(&paths)), Level::Ok);
@@ -91,32 +95,34 @@ impl App {
         let cwd = self.browser.cwd.clone();
         let targets = self.targets();
         // Add, unstage and discard take every marked entry; log and blame want one file.
-        let many = targets.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ");
-        let sel = self.browser.selected().map(|e| quote(&e.path));
+        let many: Vec<String> = targets.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let sel = self.browser.selected().map(|e| e.path.to_string_lossy().into_owned());
         let needs_sel = matches!(c, 'L' | 'w' | 'a' | 'u' | 'x');
         let Some(f) = sel.or_else(|| (!needs_sel).then(String::new)) else {
             self.set_status("select a file first", Level::Err);
             return;
         };
 
-        let cmd = match c {
-            's' => format!("{GIT} status"),
-            'd' => format!("{GIT} diff"),
-            'D' => format!("{GIT} diff --staged"),
-            'l' => format!("{GIT} log --graph --oneline --decorate --all -n 500"),
-            'L' => format!("{GIT} log --follow --stat -n 100 -- {f}"),
-            'w' => format!("{GIT} blame --date=short -- {f}"),
-            'a' => format!("{GIT} add -- {many} && {GIT} status --short"),
-            'A' => format!("{GIT} add -A && {GIT} status --short"),
-            'u' => format!("{GIT} restore --staged -- {many} && {GIT} status --short"),
+        let git = |args: &str| Step::git().args(args.split_whitespace());
+        let status = || git("status --short");
+        let cmd: Cmd = match c {
+            's' => git("status").into(),
+            'd' => git("diff").into(),
+            'D' => git("diff --staged").into(),
+            'l' => git("log --graph --oneline --decorate --all -n 500").into(),
+            'L' => git("log --follow --stat -n 100 --").arg(&f).into(),
+            'w' => git("blame --date=short --").arg(&f).into(),
+            'a' => git("add --").args(&many).then(status()),
+            'A' => git("add -A").then(status()),
+            'u' => git("restore --staged --").args(&many).then(status()),
             'f' => git::fetch_cmd(self.config.prune_gone_branches, git::base_branch(&cwd).as_deref()),
-            'p' => format!("{GIT} pull"),
-            'P' if self.git.as_ref().is_some_and(|g| !g.upstream) => format!("{GIT} push -u origin HEAD"),
-            'P' => format!("{GIT} push"),
-            'b' => format!("{GIT} branch -a -vv"),
-            'z' => format!("{GIT} stash push -u"),
-            'Z' => format!("{GIT} stash pop"),
-            'i' => format!("{GIT} init"),
+            'p' => git("pull").into(),
+            'P' if self.git.as_ref().is_some_and(|g| !g.upstream) => git("push -u origin HEAD").into(),
+            'P' => git("push").into(),
+            'b' => git("branch -a -vv").into(),
+            'z' => git("stash push -u").into(),
+            'Z' => git("stash pop").into(),
+            'i' => git("init").into(),
             'c' => return self.prompt(PromptKind::Commit { all: false }, ""),
             'C' => return self.prompt(PromptKind::Commit { all: true }, ""),
             'o' => return self.open_branch_picker(),
@@ -129,13 +135,14 @@ impl App {
                 return self.prompt(PromptKind::RemoveWorktree, "");
             }
             'e' => {
-                let cmd = format!("GIT_EDITOR={} git commit --amend", quote_str(&self.config.editor));
-                return self.foreground(Plan { cmd, cwd }, true);
+                // git runs it through its own sh, so it's the setting as written.
+                let cmd = Step::words("git commit --amend").env("GIT_EDITOR", &self.config.editor);
+                return self.foreground(Plan { cmd: cmd.into(), cwd }, true);
             }
             'x' => {
                 self.mode = Mode::Confirm {
                     msg: format!("Discard all uncommitted changes to {}? [y/N]", describe(&targets)),
-                    action: Confirmed::Task(Plan { cmd: format!("{GIT} restore -- {many}"), cwd }),
+                    action: Confirmed::Task(Plan { cmd: git("restore --").args(&many).into(), cwd }),
                 };
                 return;
             }
@@ -155,7 +162,7 @@ impl App {
                 let root = g.root.clone();
                 if c == 'R' {
                     match release::overview(&root) {
-                        Ok(cmd) => self.start_task("releases".into(), Plan { cmd, cwd: root }),
+                        Ok(cmd) => self.start_task("releases".into(), Plan { cmd: Cmd::Sh(cmd), cwd: root }),
                         Err(e) => self.set_status(e, Level::Err),
                     }
                     return;
@@ -171,11 +178,11 @@ impl App {
                     self.set_status("none of lazygit, gitui or tig is installed", Level::Err);
                     return;
                 };
-                return self.foreground(Plan { cmd: tool.into(), cwd }, false);
+                return self.foreground(Plan { cmd: Step::new(tool).into(), cwd }, false);
             }
             _ => return,
         };
-        self.start_task(cmd.replace(GIT, "git"), Plan { cmd, cwd });
+        self.start_task(cmd.display(&self.config.shell()), Plan { cmd, cwd });
     }
 
     pub(super) fn key_form(&mut self, key: KeyEvent) {
@@ -201,7 +208,7 @@ impl App {
                             self.mode = Mode::Form(form);
                             return;
                         }
-                        let cmd = release::steps(&form, ctx).join(" && ");
+                        let cmd = Cmd::Sh(release::steps(&form, ctx).join(" && "));
                         let label = format!("release {}", form.get("version").trim());
                         let cwd = ctx.root.clone();
                         self.start_task(label, Plan { cmd, cwd });

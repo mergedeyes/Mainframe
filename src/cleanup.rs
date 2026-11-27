@@ -490,7 +490,9 @@ fn scan_one(project: &Project, shared: bool) -> Vec<Item> {
 
     // The project's own clean target last: it may do anything, so it isn't measured.
     for t in targets::list(project).into_iter().filter(|t| t.name == "clean") {
-        items.push(Item::tool(root, format!("{} clean", t.group), "the project's own clean target", Vec::new(), t.cmd));
+        // The cleanup runs as one sh script.
+        let cmd = t.cmd.display(&crate::shell::Shell::sh());
+        items.push(Item::tool(root, format!("{} clean", t.group), "the project's own clean target", Vec::new(), cmd));
     }
 
     for item in &mut items {

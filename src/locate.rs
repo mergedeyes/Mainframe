@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::project::quote;
+use crate::cmd::Step;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Loc {
@@ -51,17 +51,20 @@ fn find_with(text: &str, resolve: impl Fn(&str) -> Option<PathBuf>) -> Option<Lo
 }
 
 /// A command that opens `loc` in `editor` at the right line, for the editors that support it.
-pub fn editor_cmd(editor: &str, loc: &Loc) -> String {
-    let file = quote(&loc.path);
+pub fn editor_cmd(editor: &str, loc: &Loc) -> Step {
+    let step = Step::from_setting(editor).unwrap_or_else(|| Step::new("nano"));
+    let file = loc.path.to_string_lossy();
     let (l, c) = (loc.line, loc.col.unwrap_or(1));
-    let bin = editor.split_whitespace().next().unwrap_or_default();
-    match Path::new(bin).file_name().and_then(|n| n.to_str()).unwrap_or_default() {
-        "nano" => format!("{editor} +{l},{c} {file}"),
-        "micro" => format!("{editor} +{l}:{c} {file}"),
-        "hx" | "helix" => format!("{editor} {file}:{l}:{c}"),
-        "code" | "codium" | "code-insiders" | "cursor" => format!("{editor} -g {file}:{l}:{c}"),
+    match crate::cmd::program_stem(&step.program).as_str() {
+        "nano" => step.arg(format!("+{l},{c}")).arg(file),
+        "micro" => step.arg(format!("+{l}:{c}")).arg(file),
+        "hx" | "helix" => step.arg(format!("{file}:{l}:{c}")),
+        "code" | "codium" | "code-insiders" | "cursor" => step.arg("-g").arg(format!("{file}:{l}:{c}")),
+        "notepad++" => step.arg(format!("-n{l}")).arg(format!("-c{c}")).arg(file),
+        // Windows' own editors take no line.
+        "notepad" | "edit" => step.arg(file),
         // vi, vim, nvim, emacs, kak, joe, ne, mcedit … all understand +LINE.
-        _ => format!("{editor} +{l} {file}"),
+        _ => step.arg(format!("+{l}")).arg(file),
     }
 }
 
@@ -98,8 +101,16 @@ mod tests {
     #[test]
     fn editors() {
         let loc = Loc { path: "/a b.rs".into(), line: 3, col: Some(7) };
-        assert_eq!(editor_cmd("nano", &loc), "nano +3,7 '/a b.rs'");
-        assert_eq!(editor_cmd("nvim", &loc), "nvim +3 '/a b.rs'");
-        assert_eq!(editor_cmd("code --wait", &loc), "code --wait -g '/a b.rs':3:7");
+        let args = |editor: &str| {
+            let s = editor_cmd(editor, &loc);
+            std::iter::once(s.program).chain(s.args).collect::<Vec<_>>()
+        };
+        assert_eq!(args("nano"), ["nano", "+3,7", "/a b.rs"]);
+        assert_eq!(args("nvim"), ["nvim", "+3", "/a b.rs"]);
+        assert_eq!(args("code --wait"), ["code", "--wait", "-g", "/a b.rs:3:7"]);
+        assert_eq!(
+            args(r#""C:\Program Files\Notepad++\notepad++.exe""#),
+            [r"C:\Program Files\Notepad++\notepad++.exe", "-n3", "-c7", "/a b.rs"]
+        );
     }
 }

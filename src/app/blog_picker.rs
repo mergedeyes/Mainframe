@@ -218,7 +218,7 @@ impl App {
         if let Some(follow) = blog::follow_pages_cmd(&root, path) {
             cmd = format!("{cmd} && {follow}");
         }
-        self.start_task(msg, Plan { cmd, cwd: root });
+        self.start_task(msg, Plan { cmd: crate::cmd::Cmd::Sh(cmd), cwd: root });
     }
 
     fn unpublish_post(&mut self) {

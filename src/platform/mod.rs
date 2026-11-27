@@ -7,14 +7,14 @@ mod unix;
 #[cfg(unix)]
 use unix as sys;
 #[cfg(unix)]
-pub use unix::{ProcessTree, detach, interactive_shell, open, shell, today, trash, trash_available, writable};
+pub use unix::{ProcessTree, detach, open, today, trash, trash_available, writable};
 
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
 use windows as sys;
 #[cfg(windows)]
-pub use windows::{ProcessTree, detach, interactive_shell, open, shell, today, trash, trash_available, writable};
+pub use windows::{ProcessTree, detach, open, today, trash, trash_available, writable};
 
 use std::{
     env,
@@ -56,6 +56,22 @@ pub fn cache_dir() -> PathBuf {
 /// Finds a program on PATH. On Windows `cargo` finds `cargo.exe`, `code` finds `code.cmd`.
 pub fn which(name: &str) -> Option<PathBuf> {
     env::split_paths(&env::var_os("PATH")?).find_map(|dir| sys::program_in(&dir, name))
+}
+
+/// `sh` for Mainframe's scripts that aren't Rust yet: the system's on Unix, Git's on Windows.
+pub fn posix_sh() -> Option<PathBuf> {
+    if cfg!(windows) { git_sh("sh") } else { Some("sh".into()) }
+}
+
+/// `sh` or `bash` from Git for Windows, found next to `git.exe` (in `cmd\`, `bin\` or
+/// `mingw64\bin\` of its install).
+pub fn git_sh(name: &str) -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let git = which("git")?;
+    let root = git.ancestors().skip(2).find(|d| d.join("usr").join("bin").is_dir())?;
+    [root.join("bin"), root.join("usr").join("bin")].iter().map(|d| d.join(format!("{name}.exe"))).find(|p| p.is_file())
 }
 
 /// Whether a file is something you can run: the exec bit on Unix, a PATHEXT extension

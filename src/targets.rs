@@ -3,20 +3,23 @@
 
 use std::{collections::BTreeSet, fs, path::Path, process::Command};
 
-use crate::proc;
-use crate::project::{Kind, Op, Project, quote_str, which};
+use crate::{
+    cmd::{Cmd, Step},
+    proc,
+    project::{self, Kind, Op, Project, which},
+};
 
 pub struct Target {
     /// Where it comes from: cargo, npm, make, just, …
     pub group: &'static str,
     pub name: String,
-    pub cmd: String,
+    pub cmd: Cmd,
 }
 
 pub fn list(p: &Project) -> Vec<Target> {
     let root = &p.root;
     let mut out = Vec::new();
-    let mut add = |group: &'static str, name: &str, cmd: String| {
+    let mut add = |group: &'static str, name: &str, cmd: Cmd| {
         out.push(Target { group, name: name.to_string(), cmd });
     };
     match p.kind {
@@ -32,16 +35,16 @@ pub fn list(p: &Project) -> Vec<Target> {
                 ("doc", "cargo doc --no-deps"),
                 ("update", "cargo update"),
             ] {
-                add("cargo", name, cmd.into());
+                add("cargo", name, Cmd::words(cmd));
             }
             let bins = cargo_targets(root, "bin");
             if bins.len() > 1 {
                 for b in &bins {
-                    add("bin", b, format!("cargo run --bin {}", quote_str(b)));
+                    add("bin", b, Step::words("cargo run --bin").arg(b).into());
                 }
             }
             for e in cargo_targets(root, "example") {
-                add("example", &e, format!("cargo run --example {}", quote_str(&e)));
+                add("example", &e, Step::words("cargo run --example").arg(&e).into());
             }
         }
         Kind::Go => {
@@ -53,16 +56,15 @@ pub fn list(p: &Project) -> Vec<Target> {
                 ("fmt", "gofmt -l -w ."),
                 ("tidy", "go mod tidy"),
             ] {
-                add("go", name, cmd.into());
+                add("go", name, Cmd::words(cmd));
             }
             for dir in subdirs(&root.join("cmd")) {
-                add("cmd", &dir, format!("go run ./cmd/{}", quote_str(&dir)));
+                add("cmd", &dir, Step::words("go run").arg(format!("./cmd/{dir}")).into());
             }
         }
         Kind::Python => {
-            let run = python_runner(root);
             for s in python_scripts(root) {
-                add("script", &s, format!("{run}{}", quote_str(&s)));
+                add("script", &s, in_env(root, Step::new(&s)).into());
             }
             for op in [Op::Run, Op::Test, Op::Build] {
                 if let Ok(cmd) = python_plan(op, root) {
@@ -72,7 +74,7 @@ pub fn list(p: &Project) -> Vec<Target> {
         }
         Kind::Zig => {
             for (name, cmd) in [("build", "zig build"), ("run", "zig build run"), ("test", "zig build test")] {
-                add("zig", name, cmd.into());
+                add("zig", name, Cmd::words(cmd));
             }
         }
         Kind::CMake => {
@@ -82,14 +84,14 @@ pub fn list(p: &Project) -> Vec<Target> {
                 ("test", "ctest --test-dir build --output-on-failure"),
                 ("clean", "cmake --build build --target clean"),
             ] {
-                add("cmake", name, cmd.into());
+                add("cmake", name, Cmd::words(cmd));
             }
         }
         Kind::Meson => {
             for (name, cmd) in
                 [("setup", "meson setup build"), ("compile", "meson compile -C build"), ("test", "meson test -C build")]
             {
-                add("meson", name, cmd.into());
+                add("meson", name, Cmd::words(cmd));
             }
         }
         Kind::Npm | Kind::Make | Kind::Just => {}
@@ -99,18 +101,18 @@ pub fn list(p: &Project) -> Vec<Target> {
     if root.join("package.json").is_file() {
         let pm = package_manager(root);
         for s in npm_scripts(root) {
-            add(pm, &s, format!("{pm} run {}", quote_str(&s)));
+            add(pm, &s, Step::new(pm).args(["run", &s]).into());
         }
-        add(pm, "install", format!("{pm} install"));
+        add(pm, "install", Step::new(pm).arg("install").into());
     }
     if let Some(mf) = ["GNUmakefile", "makefile", "Makefile"].iter().map(|f| root.join(f)).find(|f| f.is_file()) {
         for t in make_targets(&fs::read_to_string(mf).unwrap_or_default()) {
-            add("make", &t, format!("make {}", quote_str(&t)));
+            add("make", &t, Step::new("make").arg(&t).into());
         }
     }
     if ["justfile", "Justfile", ".justfile"].iter().any(|f| root.join(f).is_file()) {
         for r in just_recipes(root) {
-            add("just", &r, format!("just {}", quote_str(&r)));
+            add("just", &r, Step::new("just").arg(&r).into());
         }
     }
     out
@@ -222,37 +224,47 @@ fn python_scripts(root: &Path) -> Vec<String> {
     tables.into_iter().flatten().filter_map(|v| v.as_table()).flat_map(|m| m.keys().cloned()).collect()
 }
 
-/// Prefix that runs things inside the project's environment ("uv run ", "poetry run ", or nothing).
-fn python_runner(root: &Path) -> &'static str {
+/// What runs things inside the project's environment: uv, poetry, or nothing.
+fn python_runner(root: &Path) -> Option<&'static str> {
     if root.join("uv.lock").is_file() {
-        "uv run "
+        Some("uv")
     } else if root.join("poetry.lock").is_file() {
-        "poetry run "
+        Some("poetry")
     } else if which("uv").is_some() && root.join("pyproject.toml").is_file() {
-        "uv run "
+        Some("uv")
     } else {
-        ""
+        None
     }
 }
 
-pub fn python_plan(op: Op, root: &Path) -> Result<String, String> {
-    let run = python_runner(root);
-    let py = if run.is_empty() { "python3" } else { "python" };
+/// `step`, inside the project's environment: `uv run …`, `poetry run …`.
+fn in_env(root: &Path, step: Step) -> Step {
+    match python_runner(root) {
+        Some(r) => Step::new(r).arg("run").arg(step.program).args(step.args),
+        None => step,
+    }
+}
+
+pub fn python_plan(op: Op, root: &Path) -> Result<Cmd, String> {
+    let runner = python_runner(root);
+    // Inside uv's or poetry's environment `python` is the project's.
+    let py = || if runner.is_some() { Step::new("python") } else { project::python() };
     Ok(match op {
         Op::Run => {
             if let Some(s) = python_scripts(root).first() {
-                format!("{run}{}", quote_str(s))
+                in_env(root, Step::new(s)).into()
             } else if let Some(main) = ["main.py", "app.py", "__main__.py"].into_iter().find(|f| root.join(f).is_file())
             {
-                format!("{run}{py} {main}")
+                in_env(root, py().arg(main)).into()
             } else {
                 return Err("no script entry point or main.py — T lists the python tasks".into());
             }
         }
-        Op::Test => format!("{run}{py} -m pytest"),
-        Op::Build | Op::Release if run == "uv run " => "uv build".into(),
-        Op::Build | Op::Release if run == "poetry run " => "poetry build".into(),
-        Op::Build | Op::Release => format!("{py} -m build"),
+        Op::Test => in_env(root, py().args(["-m", "pytest"])).into(),
+        Op::Build | Op::Release => match runner {
+            Some(r) => Step::new(r).arg("build").into(),
+            None => py().args(["-m", "build"]).into(),
+        },
     })
 }
 

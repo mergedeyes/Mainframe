@@ -16,6 +16,8 @@ pub struct TaskPicker {
     pub title: String,
     pub root: PathBuf,
     pub list: FilterList<Target>,
+    /// Commands are shown as you'd type them into it.
+    pub shell: crate::shell::Shell,
 }
 
 impl App {
@@ -28,13 +30,15 @@ impl App {
             return self.set_status("no project here", Level::Err);
         };
         let items = targets::list(&p);
+        let shell = self.config.shell();
         if items.is_empty() {
             return self.set_status(format!("{} defines no tasks", config::pretty_path(&p.root)), Level::Info);
         }
         self.mode = Mode::Tasks(TaskPicker {
             title: format!("{} · {}", p.kind.label(), p.name),
             root: p.root,
-            list: FilterList::new(items, |t| format!("{} {} {}", t.group, t.name, t.cmd), Match::Words),
+            list: FilterList::new(items, |t| format!("{} {} {}", t.group, t.name, t.cmd.display(&shell)), Match::Words),
+            shell,
         });
     }
 
@@ -59,7 +63,7 @@ impl App {
         if interactive {
             self.foreground(plan, true);
         } else {
-            self.start_task(t.cmd.clone(), plan);
+            self.start_task(t.cmd.display(&self.config.shell()), plan);
         }
     }
 }

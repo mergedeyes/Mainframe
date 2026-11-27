@@ -9,9 +9,9 @@ use ratatui::{
 
 use super::{App, Focus, Level};
 use crate::{
+    cmd::Step,
     config,
-    git::GIT,
-    project::{self, Plan, quote_str},
+    project::{self, Plan},
     task::{Output, Task},
     watch::Watcher,
 };
@@ -100,11 +100,7 @@ impl App {
             let _ = std::io::stdout().flush();
             if project::which("notify-send").is_some() {
                 for (summary, body) in notify {
-                    self.spawn_detached(&format!(
-                        "notify-send -a Mainframe {} {}",
-                        quote_str(&summary),
-                        quote_str(&body)
-                    ));
+                    self.spawn_detached(Step::words("notify-send -a Mainframe").args([summary, body]));
                 }
             }
         }
@@ -146,13 +142,14 @@ impl App {
     /// Starts `plan` in tab `i` (a new one when `i == tabs.len()`). Whatever ran there
     /// before is killed; a watcher stays.
     fn run_in(&mut self, i: usize, label: String, plan: Plan) -> bool {
+        let shell = self.config.shell();
         let mut output = Output::new(&plan.cwd);
         output.push(Line::from(vec![
             Span::styled("$ ", Style::new().fg(Color::DarkGray)),
-            Span::styled(plan.cmd.replace(GIT, "git"), Style::new().add_modifier(Modifier::BOLD)),
+            Span::styled(plan.cmd.display(&shell), Style::new().add_modifier(Modifier::BOLD)),
             Span::styled(format!("   in {}", config::pretty_path(&plan.cwd)), Style::new().fg(Color::DarkGray)),
         ]));
-        match Task::spawn(label.clone(), &plan.cmd, &plan.cwd) {
+        match Task::spawn(label.clone(), &plan.cmd, &plan.cwd, &shell) {
             Ok(task) => {
                 let watch = self.tabs.get_mut(i).and_then(|t| t.watch.take());
                 let tab = Tab { label, output, task: Some(task), last_run: None, plan: Some(plan), watch };
@@ -294,14 +291,10 @@ struct Finished {
 /// Moves new output into `tab`; once its task has finished, marks the end in the output.
 fn poll_tab(tab: &mut Tab) -> Option<Finished> {
     let task = tab.task.as_mut()?;
-    let (status, took) = task.poll(&mut tab.output)?;
+    let (exit, took) = task.poll(&mut tab.output)?;
     tab.task = None;
-    let ok = status.success();
-    let code = match status.code() {
-        Some(c) => format!("exit {c}"),
-        None => "killed".into(),
-    };
-    let detail = format!("{code} · {:.1}s", took.as_secs_f32());
+    let ok = exit.ok();
+    let detail = format!("{} · {:.1}s", exit.describe(), took.as_secs_f32());
     let style = if ok { Color::Green } else { Color::Red };
     tab.output.push(Line::from(Span::styled(
         format!("── {} {}: {detail}", if ok { "✔" } else { "✘" }, tab.label),

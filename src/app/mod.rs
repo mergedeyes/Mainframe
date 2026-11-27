@@ -43,15 +43,16 @@ use workspaces::Workspaces;
 use crate::{
     blog::{self, Post},
     browser::{self, Browser, Preview},
+    cmd::{Cmd, Step},
     complete::Completer,
     config::{self, Config},
     deploy::Deploy,
     form::Form,
-    git::{self, GIT, GitInfo},
+    git::{self, GitInfo},
     history::History,
     line::{Edit, LineEdit},
     notes,
-    project::{self, Op, Plan, Project, quote},
+    project::{self, Op, Plan, Project},
     projects,
     settings::ProjectSettings,
     watch::{self, Watcher},
@@ -165,7 +166,7 @@ pub enum Level {
 
 /// A command that needs the real terminal (editor, interactive run, shell).
 pub struct Foreground {
-    pub cmd: String,
+    pub cmd: Cmd,
     pub cwd: PathBuf,
     /// Pause with "press Enter" afterwards so output stays readable.
     pub wait: bool,
@@ -335,7 +336,7 @@ impl App {
         }
         if self.sel_key.is_none() || self.info_cwd != self.browser.cwd {
             if self.info_cwd != self.browser.cwd && self.zoxide {
-                self.spawn_detached(&format!("zoxide add -- {}", quote(&self.browser.cwd)));
+                self.spawn_detached(Step::words("zoxide add --").path(&self.browser.cwd));
             }
             self.info_cwd = self.browser.cwd.clone();
             let _ = env::set_current_dir(&self.browser.cwd);
@@ -347,7 +348,9 @@ impl App {
         self.sel_key = Some(sel);
         self.update_preview();
         let entry = self.browser.selected().cloned();
-        self.run_hint = project::plan(Op::Run, entry.as_ref(), &self.browser.cwd, &self.config).ok().map(|p| p.cmd);
+        self.run_hint = project::plan(Op::Run, entry.as_ref(), &self.browser.cwd, &self.config)
+            .ok()
+            .map(|p| p.cmd.display(&self.config.shell()));
     }
 
     /// Notices changes made elsewhere: reloads the file list when this directory changed,
@@ -750,7 +753,7 @@ impl App {
         }
         match action {
             Confirmed::Delete(paths) => self.delete(&paths),
-            Confirmed::Task(plan) => self.start_task(plan.cmd.replace(GIT, "git"), plan),
+            Confirmed::Task(plan) => self.start_task(plan.cmd.display(&self.config.shell()), plan),
             Confirmed::Labeled(label, plan) => self.start_task(label, plan),
             Confirmed::Preset(dir) => self.apply_preset(&dir),
             Confirmed::RemoveWorktree { path, main, force } => self.remove_worktree(&path, main, force),

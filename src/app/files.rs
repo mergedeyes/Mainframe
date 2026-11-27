@@ -8,7 +8,7 @@ use std::{
 };
 
 use super::{App, Confirmed, Level, Mode};
-use crate::{config, platform, project::quote};
+use crate::{cmd::Step, config, platform};
 
 impl App {
     pub(super) fn after_create(&mut self, path: &Path, res: std::io::Result<()>) {
@@ -103,11 +103,7 @@ impl App {
                 if dst.exists() {
                     dst = unique_name(&dst);
                 }
-                let res = if mv {
-                    move_path(&src, &dst)
-                } else {
-                    run_quiet(&format!("cp -a -- {} {}", quote(&src), quote(&dst)))
-                };
+                let res = if mv { move_path(&src, &dst) } else { copy_tree(&src, &dst) };
                 res.map_err(|e| format!("paste failed: {e}"))
             };
             match res {
@@ -155,10 +151,66 @@ pub(super) fn move_path(from: &Path, to: &Path) -> std::io::Result<()> {
         return Err(std::io::Error::new(ErrorKind::AlreadyExists, "target already exists"));
     }
     match fs::rename(from, to) {
+        // Another file system: copy, then remove the original only once the copy is complete.
         Err(e) if e.kind() == ErrorKind::CrossesDevices => {
-            run_quiet(&format!("mv -n -- {} {}", quote(from), quote(to)))
+            copy_tree(from, to)?;
+            if from.is_dir() && !from.is_symlink() { fs::remove_dir_all(from) } else { fs::remove_file(from) }
         }
         other => other,
+    }
+}
+
+/// Copies a file or a whole folder like `cp -a`: links stay links, permissions and
+/// modification times are kept.
+pub(super) fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = fs::symlink_metadata(from)?;
+    if meta.is_symlink() {
+        return copy_link(from, to);
+    }
+    if meta.is_dir() {
+        fs::create_dir(to)?;
+        for e in fs::read_dir(from)? {
+            let e = e?;
+            copy_tree(&e.path(), &to.join(e.file_name()))?;
+        }
+        fs::set_permissions(to, meta.permissions())?;
+    } else {
+        // fs::copy keeps the permissions.
+        fs::copy(from, to)?;
+    }
+    if let Ok(modified) = meta.modified() {
+        let _ = fs::File::options()
+            .write(!meta.is_dir())
+            .read(meta.is_dir())
+            .open(to)
+            .and_then(|f| f.set_modified(modified));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn copy_link(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(fs::read_link(from)?, to)
+}
+
+/// Making links on Windows needs developer mode or admin rights; without, it's a copy of
+/// what the link points to.
+#[cfg(windows)]
+fn copy_link(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let target = fs::read_link(from)?;
+    let made = if from.is_dir() { symlink_dir(&target, to) } else { symlink_file(&target, to) };
+    match made {
+        Ok(()) => Ok(()),
+        Err(_) if from.is_dir() => {
+            fs::create_dir(to)?;
+            for e in fs::read_dir(from)? {
+                let e = e?;
+                copy_tree(&e.path(), &to.join(e.file_name()))?;
+            }
+            Ok(())
+        }
+        Err(_) => fs::copy(from, to).map(drop),
     }
 }
 
@@ -175,12 +227,13 @@ fn unique_name(path: &Path) -> PathBuf {
         .unwrap()
 }
 
-pub(super) fn run_quiet(cmd: &str) -> std::io::Result<()> {
-    let out = platform::shell(cmd).stdin(Stdio::null()).output()?;
+/// Runs `step` and waits; its stderr is the error when it fails.
+pub(super) fn run_quiet(step: &Step) -> std::io::Result<()> {
+    let out = step.command().stdin(Stdio::null()).output()?;
     if out.status.success() {
         Ok(())
     } else {
         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(std::io::Error::other(if msg.is_empty() { format!("{cmd} failed") } else { msg }))
+        Err(std::io::Error::other(if msg.is_empty() { format!("{} failed", step.program) } else { msg }))
     }
 }

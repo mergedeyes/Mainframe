@@ -5,9 +5,10 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use super::{App, Level, Mode};
 use crate::{
+    cmd::Step,
     filter_list::{self, FilterList, Match},
-    git::{self, Branch, GIT},
-    project::{Plan, quote_str},
+    git::{self, Branch},
+    project::Plan,
 };
 
 pub struct BranchPicker {
@@ -48,7 +49,7 @@ impl App {
             None if !typed.is_empty() => typed.to_string(),
             None => return,
         };
-        let cmd = format!("{GIT} switch {}", quote_str(&name));
+        let cmd = Step::git().args(["switch", &name]).into();
         self.start_task("git switch".into(), Plan { cmd, cwd: self.browser.cwd.clone() });
     }
 }

@@ -11,6 +11,7 @@ use ratatui::{
 
 use super::{App, Confirmed, Level, Mode};
 use crate::{
+    cmd::{Cmd, Step},
     config::{self, DesktopMode},
     desktop::{self, DesktopPlan},
     filter_list, git,
@@ -177,13 +178,13 @@ impl App {
                         config::pretty_path(&shadow),
                         config::pretty_path(&c.dest)
                     ),
-                    action: Confirmed::Task(Plan { cmd, cwd: self.browser.cwd.clone() }),
+                    action: Confirmed::Task(Plan { cmd: Cmd::Sh(cmd), cwd: self.browser.cwd.clone() }),
                 };
             }
             KeyCode::Char('r') => {
                 if let Some(c) = picker.selected().cloned() {
                     self.mode = Mode::Normal;
-                    let plan = Plan { cmd: quote(&c.path), cwd: picker_cwd(&c) };
+                    let plan = Plan { cmd: Step::new(c.path.to_string_lossy()).into(), cwd: picker_cwd(&c) };
                     self.start_task(c.name.clone(), plan);
                 }
             }
@@ -236,7 +237,7 @@ impl App {
             AfterReview::InstallBinary(c, root, before) => self.install_binary(&c, &root, before.as_deref()),
             AfterReview::CargoInstall(root, before) => {
                 let cmd = then_run(before.as_deref(), install::cargo_install_cmd(&self.config.install_dir()));
-                self.start_task("cargo install".into(), Plan { cmd, cwd: root });
+                self.start_task("cargo install".into(), Plan { cmd: Cmd::Sh(cmd), cwd: root });
             }
             AfterReview::Nothing => {}
         }
@@ -258,7 +259,7 @@ impl App {
         if !written.is_empty() {
             if project::which("update-desktop-database").is_some() {
                 let dir = desktop::app_dirs()[0].clone();
-                self.spawn_detached(&format!("update-desktop-database -q {}", quote(&dir)));
+                self.spawn_detached(Step::words("update-desktop-database -q").path(&dir));
             }
             let msg = format!("desktop entry updated: {}", written.join(", "));
             if self.tab().running() {
@@ -268,7 +269,7 @@ impl App {
             self.set_status(msg, Level::Ok);
         }
         if !sudo.is_empty() {
-            self.foreground(Plan { cmd: sudo.join(" && "), cwd: self.browser.cwd.clone() }, true);
+            self.foreground(Plan { cmd: Cmd::Sh(sudo.join(" && ")), cwd: self.browser.cwd.clone() }, true);
         }
     }
 
@@ -285,7 +286,8 @@ impl App {
             d = quote_str(&dir_s),
             pretty_dir = config::pretty_path(dir),
         );
-        self.start_task(format!("install {}", c.name), Plan { cmd: then_run(before, cmd), cwd: root.to_path_buf() });
+        let cmd = Cmd::Sh(then_run(before, cmd));
+        self.start_task(format!("install {}", c.name), Plan { cmd, cwd: root.to_path_buf() });
     }
 }
 

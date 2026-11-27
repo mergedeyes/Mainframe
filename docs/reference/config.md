@@ -24,8 +24,9 @@ explained.
 
 | Option | Default | What it does |
 |---|---|---|
-| `editor` | `"nano"` | the editor for `e` and `Enter`; anything that waits until you close it, like `"vim"` or `"micro"` |
+| `editor` | `"nano"` | the editor for `e` and `Enter`; anything that waits until you close it, like `"vim"` or `"micro"`. A program with spaces in its path goes in quotes: `'"C:\Program Files\Notepad++\notepad++.exe" -multiInst'` |
 | `vscode` | `"code"` | the command for `o` and `O` |
+| `shell` | `""` | the shell for commands you write: `:`, `[runners]` and `[[actions]]`. A name on your PATH or a full path, like `"bash"`, `"fish"`, `"pwsh"` or `"cmd"`; empty is `sh`, or PowerShell on Windows. See [Which shell runs what](#which-shell-runs-what) |
 | `install_dir` | `"~/.local/bin"` | where `i` installs programs |
 | `projects_dir` | `""` | the projects folder for `J`; empty uses the first that exists of `~/Projekte`, `~/Projects`, `~/projects`, `~/Code`, `~/code`, `~/dev`, `~/src`, `~/repos` |
 | `show_hidden` | `true` | show hidden files at start (`.` toggles) |
@@ -71,10 +72,10 @@ interactive = true
 |---|---|
 | `key` | a character (`"Z"`), `"F1"` to `"F12"`, `"enter"`, `"tab"`, `"space"`, `"esc"`, `"delete"`, `"insert"`, or one of these with `ctrl-` or `alt-` in front, like `"ctrl-g"` or `"alt-x"` |
 | `name` | what the output tab is called |
-| `cmd` | the shell command; it runs in the current folder |
+| `cmd` | the command, for the [shell](#which-shell-runs-what) you use; it runs in the current folder |
 | `interactive` | `true` runs it in the full terminal instead of the output pane, for programs that need your input |
 
-These placeholders in `cmd` are replaced, already quoted for the shell:
+These placeholders in `cmd` are replaced, already quoted for your shell:
 
 | Placeholder | Becomes |
 |---|---|
@@ -82,6 +83,17 @@ These placeholders in `cmd` are replaced, already quoted for the shell:
 | `{name}` | the selected entry's name |
 | `{dir}` | the folder you're in |
 | `{root}` | the project's folder (the folder you're in when there's no project) |
+
+### Which shell runs what
+
+Mainframe's own commands don't go through a shell: builds, tests, the tasks in
+`T`, git commands and the like start the program directly, so they work the
+same on every system. The output pane still shows each one as you'd type it.
+
+What you write yourself does: `:` commands, `[runners]` and `[[actions]]`
+run in the shell from the `shell` option, and their placeholders are quoted
+for that shell. Write them in its language: with `shell = "fish"`, an action
+can use fish syntax; on Windows, PowerShell's.
 
 ## Per-project settings
 
