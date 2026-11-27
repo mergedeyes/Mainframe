@@ -31,23 +31,52 @@ fn find_with(text: &str, resolve: impl Fn(&str) -> Option<PathBuf>) -> Option<Lo
         let line = rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
         return Some(Loc { path: resolve(file)?, line, col: None });
     }
-    // Everything else: a `path:line[:col]` token (rustc, gcc, go, tsc, pytest, panics, grep -n…).
+    // Everything else: a `path:line[:col]` token (rustc, gcc, go, tsc, pytest, panics, grep -n…)
+    // or `path(line[,col])` (MSVC, MSBuild, C#).
     text.split_whitespace().find_map(|tok| {
-        let tok = tok.trim_matches(|c| matches!(c, '(' | ')' | '[' | ']' | '\'' | '"' | ',' | '`'));
-        let tok = tok.trim_end_matches(':');
+        let tok = tok.trim_matches(|c| matches!(c, '[' | ']' | '\'' | '"' | ',' | '`')).trim_end_matches(':');
         if tok.contains("://") {
             return None;
         }
-        let mut parts = tok.split(':');
-        let file = parts.next()?;
+        if let Some(loc) = msvc(tok, &resolve) {
+            return Some(loc);
+        }
+        let tok = tok.trim_matches(|c| matches!(c, '(' | ')')).trim_end_matches(':');
+        // `C:\src\main.rs:3:5`: the drive's colon isn't a separator.
+        let (drive, rest) = split_drive(tok);
+        let mut parts = rest.split(':');
+        let file = format!("{drive}{}", parts.next()?);
         let line: u32 = parts.next()?.parse().ok()?;
         let col = parts.next().and_then(|c| c.parse().ok());
         // Requiring a dot or slash skips timestamps like 12:30:45.
-        if parts.next().is_some() || line == 0 || !(file.contains('.') || file.contains('/')) {
+        if parts.next().is_some() || line == 0 || !(file.contains('.') || file.contains(['/', '\\'])) {
             return None;
         }
-        Some(Loc { path: resolve(file)?, line, col })
+        Some(Loc { path: resolve(&file)?, line, col })
     })
+}
+
+/// `main.cpp(12)`, `Program.cs(12,5)` or `x.cpp(12,5,12,9)` (a range: its start).
+fn msvc(tok: &str, resolve: &impl Fn(&str) -> Option<PathBuf>) -> Option<Loc> {
+    let inner = tok.strip_suffix(')')?;
+    let open = inner.rfind('(')?;
+    let (file, nums) = (&inner[..open], &inner[open + 1..]);
+    let mut nums = nums.split(',').map(|n| n.parse::<u32>());
+    let line = nums.next()?.ok()?;
+    let col = nums.next().transpose().ok()?;
+    if line == 0 || !file.contains('.') || file.contains(['(', ')']) {
+        return None;
+    }
+    Some(Loc { path: resolve(file)?, line, col })
+}
+
+fn split_drive(tok: &str) -> (&str, &str) {
+    let b = tok.as_bytes();
+    if b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/') {
+        tok.split_at(2)
+    } else {
+        ("", tok)
+    }
 }
 
 /// A command that opens `loc` in `editor` at the right line, for the editors that support it.
@@ -77,11 +106,29 @@ mod tests {
     }
 
     #[test]
+    fn windows_compilers() {
+        assert_eq!(find("trunc.cpp(1): warning C4305: \"Initialisierung\""), Some(("trunc.cpp".into(), 1, None)));
+        assert_eq!(
+            find(r"C:\src\app\Program.cs(12,5): error CS1002: ; expected [C:\src\app\app.csproj]"),
+            Some((r"C:\src\app\Program.cs".into(), 12, Some(5)))
+        );
+        assert_eq!(find("x.cpp(3,9,3,14): error"), Some(("x.cpp".into(), 3, Some(9))));
+        assert_eq!(
+            find(r"  --> C:\Users\jan\demo\src\main.rs:3:5"),
+            Some((r"C:\Users\jan\demo\src\main.rs".into(), 3, Some(5)))
+        );
+        assert_eq!(find(r"  --> src\main.rs:3:5"), Some((r"src\main.rs".into(), 3, Some(5))));
+        assert_eq!(find("f(1)"), None);
+        assert_eq!(find("C:12:30"), None);
+    }
+
+    #[test]
     fn compilers() {
         assert_eq!(find("  --> src/main.rs:12:5"), Some(("src/main.rs".into(), 12, Some(5))));
         assert_eq!(find("main.c:3:10: error: expected ';'"), Some(("main.c".into(), 3, Some(10))));
         assert_eq!(find("./cmd/x.go:7: undefined: foo"), Some(("./cmd/x.go".into(), 7, None)));
-        assert_eq!(find("src/a.ts(4,2): error"), None);
+        // tsc without --pretty writes it the MSVC way.
+        assert_eq!(find("src/a.ts(4,2): error"), Some(("src/a.ts".into(), 4, Some(2))));
         assert_eq!(find("thread 'main' panicked at src/lib.rs:5:9:"), Some(("src/lib.rs".into(), 5, Some(9))));
     }
 

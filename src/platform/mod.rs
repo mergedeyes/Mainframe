@@ -7,14 +7,14 @@ mod unix;
 #[cfg(unix)]
 use unix as sys;
 #[cfg(unix)]
-pub use unix::{ProcessTree, detach, open, today, trash, trash_available, writable};
+pub use unix::{ProcessTree, detach, dev_env, msvc_available, open, today, trash, trash_available, writable};
 
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
 use windows as sys;
 #[cfg(windows)]
-pub use windows::{ProcessTree, detach, open, today, trash, trash_available, writable};
+pub use windows::{ProcessTree, detach, dev_env, msvc_available, open, today, trash, trash_available, writable};
 
 use std::{
     env,
@@ -87,6 +87,15 @@ fn simplify(p: PathBuf) -> PathBuf {
     };
     let ok = plain.len() < 260 && plain.split('\\').skip(1).all(|c| !c.ends_with(['.', ' ']) && !reserved(c));
     if ok { PathBuf::from(plain) } else { p }
+}
+
+/// A line a program wrote, as text: UTF-8 when it is; on Windows otherwise the console's
+/// OEM code page, which `cmd` and older tools still write (umlauts in German messages).
+pub fn decode(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => sys::decode_legacy(bytes),
+    }
 }
 
 /// Bytes free for this user on the file system `path` is on.

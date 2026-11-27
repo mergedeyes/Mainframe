@@ -30,6 +30,11 @@ vscode = "code"
 # on Windows. Mainframe runs its own builds, tests and git commands without one.
 shell = ""
 
+# Windows: commands run with Visual Studio's C++ build environment, as in a Developer
+# PowerShell (cl, link, INCLUDE, LIB), when Visual Studio is installed and cl isn't on
+# PATH already. false runs them with the environment Mainframe was started in.
+vs_env = true
+
 # Where `i` copies standalone executables to.
 install_dir = "~/.local/bin"
 
@@ -104,6 +109,7 @@ pub struct Config {
     pub editor: String,
     pub vscode: String,
     pub shell: String,
+    pub vs_env: bool,
     pub install_dir: String,
     pub projects_dir: String,
     pub show_hidden: bool,
@@ -124,6 +130,7 @@ impl Default for Config {
             editor: "nano".into(),
             vscode: "code".into(),
             shell: String::new(),
+            vs_env: true,
             install_dir: "~/.local/bin".into(),
             projects_dir: String::new(),
             show_hidden: true,
@@ -193,10 +200,11 @@ impl Config {
 /// The settings at the top of config.toml. TOML puts every key below a `[section]`
 /// header into that section, and a section can't be closed. None of these names means
 /// anything inside a section, so wherever one ends up, it's moved back to the top.
-const TOP_LEVEL: [&str; 13] = [
+const TOP_LEVEL: [&str; 14] = [
     "editor",
     "vscode",
     "shell",
+    "vs_env",
     "install_dir",
     "projects_dir",
     "show_hidden",
@@ -274,6 +282,11 @@ fn key_lines(text: &str, key: &str) -> Vec<usize> {
 }
 
 impl Config {
+    /// How commands run: the shell, and Visual Studio's environment on Windows.
+    pub fn setup(&self) -> crate::run::Setup {
+        crate::run::Setup { shell: self.shell(), dev_env: self.vs_env }
+    }
+
     /// The shell the `shell` setting names.
     pub fn shell(&self) -> crate::shell::Shell {
         crate::shell::Shell::new(&self.shell)

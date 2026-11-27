@@ -80,8 +80,8 @@ pub fn list(p: &Project) -> Vec<Target> {
         Kind::CMake => {
             for (name, cmd) in [
                 ("configure", "cmake -S . -B build"),
-                ("build", "cmake --build build"),
-                ("test", "ctest --test-dir build --output-on-failure"),
+                ("build", "cmake --build build --config Debug"),
+                ("test", "ctest --test-dir build --output-on-failure -C Debug"),
                 ("clean", "cmake --build build --target clean"),
             ] {
                 add("cmake", name, Cmd::words(cmd));

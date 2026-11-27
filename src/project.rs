@@ -171,11 +171,12 @@ pub fn plan(op: Op, target: Option<&Entry>, cwd: &Path, cfg: &Config) -> Result<
         (Kind::Zig, Op::Release) => w("zig build -Doptimize=ReleaseFast"),
         (Kind::Zig, Op::Test) => w("zig build test"),
         (Kind::CMake, Op::Run) => return Err("cmake doesn't say what to run — T lists its tasks".into()),
-        (Kind::CMake, Op::Build) => w("cmake -S . -B build").then(Step::words("cmake --build build")),
-        (Kind::CMake, Op::Release) => {
-            w("cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release").then(Step::words("cmake --build build-release"))
-        }
-        (Kind::CMake, Op::Test) => w("ctest --test-dir build --output-on-failure"),
+        // --config and -C pick the build type for multi-config generators (Visual Studio,
+        // Ninja Multi-Config); single-config ones ignore them.
+        (Kind::CMake, Op::Build) => w("cmake -S . -B build").then(Step::words("cmake --build build --config Debug")),
+        (Kind::CMake, Op::Release) => w("cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release")
+            .then(Step::words("cmake --build build-release --config Release")),
+        (Kind::CMake, Op::Test) => w("ctest --test-dir build --output-on-failure -C Debug"),
         (Kind::Meson, Op::Run) => return Err("meson doesn't say what to run — T lists its tasks".into()),
         (Kind::Meson, Op::Build) => {
             Step::words("meson setup build").unless_exists("build").then(Step::words("meson compile -C build"))
@@ -268,8 +269,8 @@ fn powershell_file(name: &str) -> Step {
     step.args(["-File", name])
 }
 
-/// Compiles one C or C++ file to `exe`. On Windows: cl when a developer prompt put it on
-/// PATH, else clang, else gcc (MinGW), else cl anyway.
+/// Compiles one C or C++ file to `exe`. On Windows: cl when Visual Studio is there (tasks
+/// get its environment), else clang, else gcc (MinGW), else cl anyway.
 fn compile_c(cpp: bool, name: &str, exe: &Path) -> Step {
     let exe_s = exe.to_string_lossy();
     let unix = |cc: &str| Step::new(cc).args(["-Wall", "-o", &exe_s, name]);
@@ -277,7 +278,7 @@ fn compile_c(cpp: bool, name: &str, exe: &Path) -> Step {
         return unix(if cpp { "c++" } else { "cc" });
     }
     let has = |p: &str| platform::which(p).is_some();
-    if !has("cl") {
+    if !platform::msvc_available() {
         let (clang, gcc) = if cpp { ("clang++", "g++") } else { ("clang", "gcc") };
         if has(clang) {
             return unix(clang);

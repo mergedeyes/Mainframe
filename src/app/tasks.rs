@@ -146,7 +146,7 @@ impl App {
             Span::styled(plan.cmd.display(&shell), Style::new().add_modifier(Modifier::BOLD)),
             Span::styled(format!("   in {}", config::pretty_path(&plan.cwd)), Style::new().fg(Color::DarkGray)),
         ]));
-        match Task::spawn(label.clone(), &plan.cmd, &plan.cwd, &shell) {
+        match Task::spawn(label.clone(), &plan.cmd, &plan.cwd, &self.config.setup()) {
             Ok(task) => {
                 let watch = self.tabs.get_mut(i).and_then(|t| t.watch.take());
                 let tab = Tab { label, output, task: Some(task), last_run: None, plan: Some(plan), watch };

@@ -80,10 +80,20 @@ pub enum Sink {
     Terminal { capture: Option<String> },
 }
 
+/// How commands run, from the config.
+#[derive(Debug, Clone, Default)]
+pub struct Setup {
+    /// For command lines the user wrote.
+    pub shell: Shell,
+    /// On Windows, Visual Studio's build environment for every program ([`platform::dev_env`]).
+    pub dev_env: bool,
+}
+
 /// What a built-in step works with.
 pub struct Ctx<'a> {
     pub cwd: PathBuf,
     pub shell: Shell,
+    dev_env: bool,
     sink: Sink,
     control: &'a Control,
 }
@@ -92,8 +102,8 @@ const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
 impl<'a> Ctx<'a> {
-    pub fn new(cwd: &Path, shell: Shell, sink: Sink, control: &'a Control) -> Self {
-        Self { cwd: cwd.to_path_buf(), shell, sink, control }
+    pub fn new(cwd: &Path, setup: Setup, sink: Sink, control: &'a Control) -> Self {
+        Self { cwd: cwd.to_path_buf(), shell: setup.shell, dev_env: setup.dev_env, sink, control }
     }
 
     /// What a terminal run captured, when it was asked to.
@@ -164,7 +174,7 @@ impl<'a> Ctx<'a> {
         c.current_dir(step.dir.as_deref().unwrap_or(&self.cwd)).stdin(Stdio::null()).stderr(Stdio::null());
         hide_console(&mut c);
         let out = c.output().ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        out.status.success().then(|| platform::decode(&out.stdout).trim().to_string())
     }
 
     /// Starts `command` (its folder already set) and waits for it, its output going to the sink.
@@ -180,6 +190,12 @@ impl<'a> Ctx<'a> {
     fn spawn_with(&mut self, mut command: Command, program: &str, input: Option<std::fs::File>) -> Exit {
         if self.stopped() {
             return Exit::Killed;
+        }
+        if self.dev_env {
+            // What the step sets itself stays.
+            let own: Vec<_> = command.get_envs().map(|(k, _)| k.to_ascii_uppercase()).collect();
+            let dev = platform::dev_env().iter().filter(|(k, _)| !own.contains(&k.to_ascii_uppercase()));
+            command.envs(dev.cloned().collect::<Vec<_>>());
         }
         let has_input = input.is_some();
         if let Some(f) = input {
@@ -248,7 +264,7 @@ impl<'a> Ctx<'a> {
                         if bytes.last() == Some(&b'\r') {
                             bytes.pop();
                         }
-                        if tx.send(Msg::Line(String::from_utf8_lossy(&bytes).into_owned())).is_err() {
+                        if tx.send(Msg::Line(platform::decode(&bytes))).is_err() {
                             break;
                         }
                     }
@@ -423,7 +439,8 @@ pub mod testing {
     pub fn with_ctx<T>(cwd: &Path, f: impl FnOnce(&mut Ctx) -> T) -> (T, String) {
         let control = Control::default();
         let (tx, rx) = mpsc::channel();
-        let mut ctx = Ctx::new(cwd, Shell::default(), Sink::Pane(tx), &control);
+        let setup = Setup { shell: Shell::default(), dev_env: true };
+        let mut ctx = Ctx::new(cwd, setup, Sink::Pane(tx), &control);
         let result = f(&mut ctx);
         drop(ctx);
         let mut out = String::new();

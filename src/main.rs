@@ -100,7 +100,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         }
 
         if let Some(fg) = app.pending.take() {
-            let output = run_foreground(terminal, &fg, &app.config.shell())?;
+            let output = run_foreground(terminal, &fg, &app.config.setup())?;
             app.after_foreground(&fg, output);
         }
     }
@@ -110,7 +110,8 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 
 /// Hands the real terminal to a command (nano, an interactive program, a shell).
 /// Returns its stdout when `cd_to_output` asked for it to be captured.
-fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground, shell: &shell::Shell) -> Result<Option<String>> {
+fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground, setup: &run::Setup) -> Result<Option<String>> {
+    let shell = &setup.shell;
     execute!(io::stdout(), DisableBracketedPaste)?;
     ratatui::restore();
     execute!(io::stdout(), cursor::Show)?;
@@ -120,7 +121,7 @@ fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground, shell: &shell
 
     let control = run::Control::default();
     let capture = fg.cd_to_output.then(String::new);
-    let mut ctx = run::Ctx::new(&fg.cwd, shell.clone(), run::Sink::Terminal { capture }, &control);
+    let mut ctx = run::Ctx::new(&fg.cwd, setup.clone(), run::Sink::Terminal { capture }, &control);
     let exit = run::run(&fg.cmd, &mut ctx);
     let output = ctx.captured();
 
