@@ -82,9 +82,11 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         txt(" git  "),
         key(":"),
         txt(" cmd  "),
-        key("?"),
-        txt(" help"),
     ]);
+    if app.blog_root.is_some() {
+        spans.extend([key("L"), txt(" blog  ")]);
+    }
+    spans.extend([key("?"), txt(" help")]);
     f.render_widget(Line::from(spans), area);
 }
 

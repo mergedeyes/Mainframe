@@ -190,6 +190,9 @@ impl App {
         if std::mem::take(&mut self.reopen_deploy) {
             self.open_deploy(None);
         }
+        if let Some(path) = self.reopen_blog.take() {
+            self.open_blog_picker(Some(&path));
+        }
         if let Some((root, title)) = self.reopen_notes.take() {
             self.open_notes(root, title);
             self.refresh_todo_count();

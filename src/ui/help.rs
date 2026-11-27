@@ -104,8 +104,16 @@ fn help_column(sections: &[HelpSection]) -> Vec<Line<'static>> {
     lines
 }
 
-pub(super) fn draw_help(f: &mut Frame, area: Rect) {
-    let columns = HELP.map(help_column);
+/// Only shown in the blog repo, where `L` does something.
+const BLOG: HelpSection = ("blog", &[("L", "drafts and posts")]);
+
+pub(super) fn draw_help(f: &mut Frame, area: Rect, blog: bool) {
+    let mut columns = HELP.map(help_column);
+    if blog {
+        let last = &mut columns[2];
+        last.push(Line::default());
+        last.extend(help_column(&[BLOG]));
+    }
     let h = columns.iter().map(Vec::len).max().unwrap_or(0) as u16 + 2;
     let rect = popup(area, 110, h);
     let inner = popup_pane(f, rect, Line::from(" keys ".bold()), " custom keys: , to edit config · any key to close ");

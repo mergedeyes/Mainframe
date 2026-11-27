@@ -134,7 +134,7 @@ fn has_suffix(v: &str) -> bool {
 }
 
 /// `owner/repo` of a GitHub remote URL (ssh or https).
-fn github_repo(url: &str) -> Option<String> {
+pub fn github_repo(url: &str) -> Option<String> {
     let rest = url
         .strip_prefix("git@github.com:")
         .or_else(|| url.strip_prefix("ssh://git@github.com/"))

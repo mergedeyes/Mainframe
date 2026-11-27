@@ -179,3 +179,22 @@ settings file in your editor · `Esc` close
 | `C` | remove checked todos |
 | `E` | the whole file in your editor |
 | `Esc`, `q` or `M` | close |
+
+## Blog (`L`)
+
+Only in the blog repo set with `blog_repo` in the
+[configuration](config.md), or in a worktree of it; anywhere else `L` does
+nothing. See [Blog](../guides/blog.md).
+
+| Key | What it does |
+|---|---|
+| `j` `k`, ↓ ↑ | move |
+| `g` `G`, `Home` `End` | first, last post |
+| `Enter`, `e` | edit in your editor; the picker comes back afterwards |
+| `a` | new post: title, description, draft or post now |
+| `p` | publish a draft: move it to `_posts/` with today's date, commit and push (asks first) |
+| `P` | commit and push your changes to a post |
+| `u` | unpublish: move a post back to `_drafts/`, no commit |
+| `d`, Delete | move to the trash (asks first) |
+| `/` | filter; `Enter` keeps it, `Esc` clears it |
+| `Esc`, `q` or `L` | close (`Esc` clears a filter first) |

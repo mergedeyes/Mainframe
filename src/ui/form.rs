@@ -24,6 +24,14 @@ pub(super) fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
             ("  ·  ", "  ·  "),
         ),
         FormKind::NewProject => (crate::scaffold::steps(form), "create", "will", ("  ·  ", "  ·  ")),
+        FormKind::BlogPost { root } => {
+            let draft = form.get("save as") == "draft";
+            let steps = match crate::blog::new_path(root, form.get("title"), draft, &crate::blog::today()) {
+                Ok(path) => vec![format!("write {}", crate::blog::rel(root, &path)), "open it in your editor".into()],
+                Err(e) => vec![e],
+            };
+            (steps, "write", "will", ("  ·  ", "  ·  "))
+        }
     };
     let w = 92.min(area.width.saturating_sub(2));
     let mut cmd = vec![Line::from(format!("  {heading}").fg(DIM))];

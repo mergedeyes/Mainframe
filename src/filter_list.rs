@@ -79,6 +79,19 @@ impl<T> FilterList<T> {
         self.state.select((!self.visible.is_empty()).then_some(0));
     }
 
+    /// Empties the filter, showing every item again.
+    pub fn clear_filter(&mut self) {
+        self.filter = LineEdit::default();
+        self.apply_filter();
+    }
+
+    /// Selects the first shown item `pick` accepts, if any.
+    pub fn select_where(&mut self, pick: impl Fn(&T) -> bool) {
+        if let Some(row) = self.visible.iter().position(|&i| pick(&self.items[i])) {
+            self.state.select(Some(row));
+        }
+    }
+
     pub fn selected(&self) -> Option<&T> {
         self.visible.get(self.state.selected()?).map(|&i| &self.items[i])
     }

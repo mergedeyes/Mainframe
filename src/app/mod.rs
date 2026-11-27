@@ -1,6 +1,7 @@
 //! App state and the key dispatch for the normal mode; each other mode lives in its own file.
 
 mod actions;
+mod blog_picker;
 mod branch_picker;
 mod cleanup;
 mod deploy;
@@ -25,6 +26,7 @@ use std::{
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+pub use blog_picker::BlogPicker;
 pub use branch_picker::BranchPicker;
 pub use cleanup::CleanupPicker;
 pub use deploy::{DeployPicker, deploy_from_form};
@@ -37,6 +39,7 @@ pub use tasks::Tab;
 use workspaces::Workspaces;
 
 use crate::{
+    blog::{self, Post},
     browser::{self, Browser, Preview},
     complete::Completer,
     config::{self, Config},
@@ -83,6 +86,7 @@ pub enum Mode {
     DesktopReview(DesktopReview),
     Deploy(DeployPicker),
     Cleanup(CleanupPicker),
+    Blog(BlogPicker),
 }
 
 #[derive(Clone)]
@@ -137,6 +141,10 @@ pub enum Confirmed {
     RemoveDeploy(String, usize, PathBuf),
     /// Install although the checkout is behind its remote branch.
     Install(AfterReview, Vec<crate::desktop::DesktopPlan>),
+    /// Publish a draft of the blog at the path: move it to `_posts`, commit, push.
+    BlogPublish(PathBuf, Box<Post>),
+    /// Trash a draft or post, then back to the blog picker.
+    BlogDelete(PathBuf),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -221,6 +229,10 @@ pub struct App {
     /// The project whose output tabs are shown, and the other projects' tabs.
     pub workspace: Option<PathBuf>,
     workspaces: Workspaces,
+    /// The blog worktree when the current folder is in the `blog_repo` (`L` works there).
+    pub blog_root: Option<PathBuf>,
+    /// The editor was opened from the blog picker: open it again afterwards, on this file.
+    reopen_blog: Option<PathBuf>,
 }
 
 impl App {
@@ -267,6 +279,8 @@ impl App {
             reopen_deploy: false,
             workspace: None,
             workspaces: Workspaces::new(),
+            blog_root: None,
+            reopen_blog: None,
         };
         app.zoxide = app.config.zoxide && project::which("zoxide").is_some();
         app.browser.select_first();
@@ -322,6 +336,7 @@ impl App {
             self.info_cwd = self.browser.cwd.clone();
             let _ = env::set_current_dir(&self.browser.cwd);
             self.project = project::detect(&self.browser.cwd);
+            self.blog_root = blog::root(&self.browser.cwd, &self.config.blog_repo);
             self.request_git();
             self.update_notes_root();
         }
@@ -453,6 +468,7 @@ impl App {
             Mode::DesktopReview(_) => self.key_desktop_review(key),
             Mode::Deploy(_) => self.key_deploy(key),
             Mode::Cleanup(_) => self.key_cleanup(key),
+            Mode::Blog(_) => self.key_blog_picker(key),
             Mode::Normal => self.key_normal(key),
         }
         if !self.show_output {
@@ -540,6 +556,7 @@ impl App {
             KeyCode::Char('Z') => self.zoxide_pick(),
             KeyCode::Char('J') => self.open_project_picker(),
             KeyCode::Char('M') => self.open_current_notes(),
+            KeyCode::Char('L') if self.blog_root.is_some() => self.open_blog_picker(None),
 
             // actions
             KeyCode::Char('e') => self.edit_selected(),
@@ -701,6 +718,12 @@ impl App {
     fn key_confirm(&mut self, key: KeyEvent) {
         let Mode::Confirm { action, .. } = std::mem::replace(&mut self.mode, Mode::Normal) else { return };
         if !matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+            // Cancelling something asked from the blog picker goes back to it.
+            match &action {
+                Confirmed::BlogPublish(_, post) => self.open_blog_picker(Some(&post.path.clone())),
+                Confirmed::BlogDelete(path) => self.open_blog_picker(Some(&path.clone())),
+                _ => {}
+            }
             self.set_status("cancelled", Level::Info);
             return;
         }
@@ -713,6 +736,8 @@ impl App {
             Confirmed::Rollback(d, root) => self.run_deploy(&d, &root, deploy::Run::Rollback),
             Confirmed::RemoveDeploy(name, idx, root) => self.remove_deploy(&name, idx, &root),
             Confirmed::Install(then, plans) => self.start_install(then, plans),
+            Confirmed::BlogPublish(root, post) => self.publish_post(root, &post),
+            Confirmed::BlogDelete(path) => self.delete_post(path),
         }
     }
 }

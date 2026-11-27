@@ -72,6 +72,8 @@ unless you ask for it.
   into any existing project.
 - **Cleanup:** build output, dependencies and caches, across projects and
   worktrees, measured as on disk on compressed btrfs.
+- **Blog:** in your Jekyll blog repo, `L` lists drafts and posts, writes
+  new ones, publishes, pushes and tells you when GitHub Pages has the post live.
 
 ## Getting started
 
