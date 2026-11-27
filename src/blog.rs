@@ -1,5 +1,6 @@
-//! A Jekyll blog in the repo `blog_repo` names: its drafts and posts, new posts, and moving
-//! them between `_drafts/` and `_posts/`. Only the files; the `L` picker is in `app::blog_picker`.
+//! A Jekyll blog in the repo `blog_repo` names: its drafts and posts, new posts, moving them
+//! between `_drafts/` and `_posts/`, and the /now page. Only the files; the `L` picker is in
+//! `app::blog_picker`.
 
 use std::{
     fs, io,
@@ -15,18 +16,23 @@ use crate::{
 
 pub const DRAFTS: &str = "_drafts";
 pub const POSTS: &str = "_posts";
+/// The /now page (https://nownownow.com/about), at the top of the blog: one page rewritten in
+/// place whenever what you're up to changes, with the day of the last change in `updated:`.
+pub const NOW: &str = "now.md";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Draft,
     Post,
+    /// The /now page, `now.md`.
+    Now,
 }
 
 #[derive(Debug, Clone)]
 pub struct Post {
     pub path: PathBuf,
     pub state: State,
-    /// `YYYY-MM-DD` from the file name; posts only.
+    /// `YYYY-MM-DD`: a post's from the file name, the /now page's from `updated:`.
     pub date: Option<String>,
     /// The file name without date and `.md`: Jekyll's `:title`.
     pub slug: String,
@@ -40,6 +46,7 @@ impl Post {
         let dir = match self.state {
             State::Draft => DRAFTS,
             State::Post => POSTS,
+            State::Now => return NOW.into(),
         };
         format!("{dir}/{}", config::dir_name(&self.path))
     }
@@ -67,8 +74,10 @@ pub fn root(cwd: &Path, setting: &str) -> Option<PathBuf> {
     (top(&blog)? == blog && common(&cwd)? == common(&blog)?).then_some(here)
 }
 
-/// Drafts first, most recently changed first; then posts, newest first.
+/// The /now page when there is one, then drafts, most recently changed first, then posts,
+/// newest first.
 pub fn list(root: &Path) -> Vec<Post> {
+    let now = Some(root.join(NOW)).filter(|p| p.is_file()).and_then(|p| post(&p));
     let mut drafts: Vec<(SystemTime, Post)> = md_files(&root.join(DRAFTS))
         .iter()
         .filter_map(|path| {
@@ -79,10 +88,10 @@ pub fn list(root: &Path) -> Vec<Post> {
     drafts.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.slug.cmp(&b.1.slug)));
     let mut posts: Vec<Post> = md_files(&root.join(POSTS)).iter().filter_map(|p| post(p)).collect();
     posts.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| b.slug.cmp(&a.slug)));
-    drafts.into_iter().map(|(_, p)| p).chain(posts).collect()
+    now.into_iter().chain(drafts.into_iter().map(|(_, p)| p)).chain(posts).collect()
 }
 
-/// The post or draft at `path`, as `list` would show it.
+/// The post, draft or /now page at `path`, as `list` would show it.
 pub fn post(path: &Path) -> Option<Post> {
     let stem = path.file_stem()?.to_str()?.to_string();
     let dir = path.parent()?.file_name()?;
@@ -93,6 +102,9 @@ pub fn post(path: &Path) -> Option<Post> {
         let (date, slug) = split_date(&stem)?;
         let (date, slug) = (date.to_string(), slug.to_string());
         Some(Post { path: path.to_path_buf(), state: State::Post, date: Some(date), title: title(&slug), slug })
+    } else if path.file_name()? == NOW {
+        let date = fs::read_to_string(path).ok().and_then(|t| front_value(&t, "updated"));
+        Some(Post { path: path.to_path_buf(), state: State::Now, date, title: title("Now"), slug: stem })
     } else {
         None
     }
@@ -119,6 +131,12 @@ fn read_title(path: &Path) -> Option<String> {
 
 /// `title` from the YAML front matter at the top of a post.
 pub fn title_of(text: &str) -> Option<String> {
+    front_value(text, "title")
+}
+
+/// A one-line `key:` from the YAML front matter at the top of a file; None when it's
+/// missing or empty.
+fn front_value(text: &str, key: &str) -> Option<String> {
     let mut lines = text.lines();
     if lines.next()?.trim_end() != "---" {
         return None;
@@ -127,9 +145,9 @@ pub fn title_of(text: &str) -> Option<String> {
         if line.trim_end() == "---" {
             break;
         }
-        if let Some(value) = line.strip_prefix("title:") {
-            let title = unquote(value.trim());
-            return (!title.is_empty()).then_some(title);
+        if let Some(value) = line.strip_prefix(key).and_then(|rest| rest.strip_prefix(':')) {
+            let value = unquote(value.trim());
+            return (!value.is_empty()).then_some(value);
         }
     }
     None
@@ -379,6 +397,50 @@ pub fn unpublish(root: &Path, post: &Post) -> Result<PathBuf, String> {
     Ok(to)
 }
 
+/// Writes `now.md` from a starting template when the blog has none; never over an existing
+/// file. Its layout is the blog's own `now` layout, else `page`, which Jekyll themes have.
+pub fn create_now(root: &Path, today: &str) -> Result<PathBuf, String> {
+    let path = root.join(NOW);
+    let layout = if root.join("_layouts/now.html").is_file() { "now" } else { "page" };
+    let text = format!(
+        "---\nlayout: {layout}\ntitle: \"Now\"\ndescription: \"What I'm focused on at the moment.\"\n\
+         permalink: /now/\nupdated: {today}\n---\n\n- \n"
+    );
+    let write =
+        || io::Write::write_all(&mut fs::OpenOptions::new().write(true).create_new(true).open(&path)?, text.as_bytes());
+    match write() {
+        Ok(()) => Ok(path),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(format!("{NOW} already exists")),
+        Err(e) => Err(format!("can't write {NOW}: {e}")),
+    }
+}
+
+/// Sets `updated:` in the front matter of the file at `path` to `today`, or adds it at the
+/// end of the front matter. The /now page shows it as the day it last changed.
+pub fn stamp_updated(path: &Path, today: &str) -> Result<(), String> {
+    let name = config::dir_name(path);
+    let text = fs::read_to_string(path).map_err(|e| format!("can't read {name}: {e}"))?;
+    let stamped = with_updated(&text, today).ok_or_else(|| format!("{name} has no front matter"))?;
+    if stamped != text {
+        fs::write(path, stamped).map_err(|e| format!("can't write {name}: {e}"))?;
+    }
+    Ok(())
+}
+
+fn with_updated(text: &str, today: &str) -> Option<String> {
+    let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+    if lines.first()?.trim_end() != "---" {
+        return None;
+    }
+    let close = lines.iter().skip(1).position(|l| l.trim_end() == "---")? + 1;
+    let line = format!("updated: {today}");
+    match lines[1..close].iter().position(|l| l.starts_with("updated:")) {
+        Some(i) => lines[i + 1] = line,
+        None => lines.insert(close, line),
+    }
+    Some(lines.join("\n"))
+}
+
 fn move_to(root: &Path, from: &Path, to: &Path) -> Result<(), String> {
     if to.exists() {
         return Err(format!("{} already exists", rel(root, to)));
@@ -416,20 +478,28 @@ pub fn commit_cmd(root: &Path, message: &str) -> String {
     format!("git add -A {} && git commit -m {} && git push", dirs.join(" "), quote_str(message))
 }
 
+/// Commits only the /now page with `message` and pushes.
+pub fn commit_now_cmd(message: &str) -> String {
+    format!("git add -A -- {NOW} && git commit -m {} && git push", quote_str(message))
+}
+
 /// Shell steps that follow the GitHub Pages build of the pushed commit, then print and
-/// notify "post live: <url>" or what went wrong. None without `gh` or a GitHub origin.
+/// notify "post live: <url>" (or "now page live: …") or what went wrong. None without `gh`
+/// or a GitHub origin.
 pub fn follow_pages_cmd(root: &Path, post_path: &Path) -> Option<String> {
     which("gh")?;
     let origin = git_text(root, &["remote", "get-url", "origin"])?;
     let repo = crate::release::github_repo(&origin)?;
-    Some(follow_pages_script(&repo, &post_url(root, &repo, post_path)?))
+    let what = if post(post_path)?.state == State::Now { "now page" } else { "post" };
+    Some(follow_pages_script(&repo, &format!("{what} live: {}", post_url(root, &repo, post_path)?)))
 }
 
 /// The polling loop behind [`follow_pages_cmd`], in braces so it joins a `&&` chain as one
 /// step. About three minutes, every five seconds: the build for a push shows up after a while.
-fn follow_pages_script(repo: &str, url: &str) -> String {
+/// `live` is the message once it's built.
+fn follow_pages_script(repo: &str, live: &str) -> String {
     let api = format!("gh api repos/{repo}/pages/builds/latest");
-    let live = quote_str(&format!("post live: {url}"));
+    let live = quote_str(live);
     format!(
         "{{ echo 'waiting for the GitHub Pages build …'; head=$(git rev-parse HEAD); s=; \
          for i in $(seq 36); do sleep 5; r=$({api} -q '.commit + \" \" + .status' 2>/dev/null); \
@@ -441,11 +511,18 @@ fn follow_pages_script(repo: &str, url: &str) -> String {
     )
 }
 
-/// The address of a post, by Jekyll's default permalink `/:year/:month/:day/:title/`, on the
-/// domain in `CNAME` or else the repo's github.io address.
+/// The address of a post, by Jekyll's default permalink `/:year/:month/:day/:title/`, or of
+/// the /now page, by its `permalink:` (else `/now/`), on the domain in `CNAME` or else the
+/// repo's github.io address.
 pub fn post_url(root: &Path, repo: &str, post_path: &Path) -> Option<String> {
-    let stem = post_path.file_stem()?.to_str()?;
-    let (date, slug) = split_date(stem)?;
+    let path = if post(post_path)?.state == State::Now {
+        let permalink = fs::read_to_string(post_path).ok().and_then(|t| front_value(&t, "permalink"));
+        let permalink = permalink.unwrap_or_else(|| "/now/".into());
+        format!("/{}", permalink.trim_start_matches('/'))
+    } else {
+        let (date, slug) = split_date(post_path.file_stem()?.to_str()?)?;
+        format!("/{}/{slug}/", date.replace('-', "/"))
+    };
     let base = match fs::read_to_string(root.join("CNAME")).ok().map(|c| c.trim().to_string()).filter(|c| !c.is_empty())
     {
         Some(domain) => format!("https://{}", domain.trim_end_matches('/')),
@@ -458,7 +535,7 @@ pub fn post_url(root: &Path, repo: &str, post_path: &Path) -> Option<String> {
             }
         }
     };
-    Some(format!("{base}/{}/{slug}/", date.replace('-', "/")))
+    Some(format!("{base}{path}"))
 }
 
 #[cfg(test)]
@@ -665,7 +742,8 @@ mod tests {
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
         let run = |gh: &str, before: &str| {
             crate::testutil::stub(&bin, "gh", gh);
-            let script = format!("{before}{}", follow_pages_script("me/blog", "https://me.github.io/blog/x/"));
+            let script =
+                format!("{before}{}", follow_pages_script("me/blog", "post live: https://me.github.io/blog/x/"));
             let out = std::process::Command::new("sh")
                 .args(["-c", &script])
                 .current_dir(&dir)
@@ -720,6 +798,90 @@ mod tests {
         let mut bare = Doc::parse("just text");
         bare.title = "Titel".into();
         assert_eq!(bare.render(), "---\nlayout: post\ntitle: \"Titel\"\n---\n\njust text");
+    }
+
+    #[test]
+    fn the_now_page_comes_first_with_its_updated_date() {
+        let root = temp_dir("blog-now");
+        write(&root.join("_posts/2026-03-01-third.md"), "---\ntitle: Third\n---\n");
+        write(&root.join("_drafts/now.md"), "a draft that happens to be called now");
+        assert!(list(&root).iter().all(|p| p.state != State::Now));
+
+        write(&root.join("now.md"), "---\nlayout: now\ntitle: \"Jetzt\"\nupdated: 2026-11-20\n---\n\n- x\n");
+        let posts = list(&root);
+        let shown: Vec<(State, Option<&str>, &str)> =
+            posts.iter().map(|p| (p.state, p.date.as_deref(), p.title.as_str())).collect();
+        assert_eq!(
+            shown,
+            vec![
+                (State::Now, Some("2026-11-20"), "Jetzt"),
+                (State::Draft, None, "now"),
+                (State::Post, Some("2026-03-01"), "Third"),
+            ]
+        );
+        assert_eq!(posts[0].rel(), "now.md");
+        assert!(publish(&root, &posts[0], "2026-11-27").is_err());
+        assert!(unpublish(&root, &posts[0]).is_err());
+
+        // Without front matter: titled "Now", no date.
+        write(&root.join("now.md"), "just text");
+        let now = post(&root.join("now.md")).unwrap();
+        assert_eq!((now.state, now.date, now.title.as_str()), (State::Now, None, "Now"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn creates_the_now_page_once() {
+        let root = temp_dir("blog-now-create");
+        let path = create_now(&root, "2026-11-27").unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("---\nlayout: page\ntitle: \"Now\"\n"), "{text}");
+        assert!(text.contains("\npermalink: /now/\nupdated: 2026-11-27\n---\n"));
+        fs::write(&path, "mine").unwrap();
+        assert_eq!(create_now(&root, "2026-11-28").unwrap_err(), "now.md already exists");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "mine");
+
+        // The blog's own layout when it has one.
+        fs::remove_file(&path).unwrap();
+        write(&root.join("_layouts/now.html"), "");
+        assert!(fs::read_to_string(create_now(&root, "2026-11-27").unwrap()).unwrap().contains("layout: now\n"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn stamps_the_updated_date() {
+        assert_eq!(
+            with_updated("---\ntitle: Now\nupdated: 2026-01-01\ntags: [x]\n---\n\nupdated: body\n", "2026-11-27")
+                .unwrap(),
+            "---\ntitle: Now\nupdated: 2026-11-27\ntags: [x]\n---\n\nupdated: body\n"
+        );
+        assert_eq!(
+            with_updated("---\ntitle: Now\n---\n\ntext", "2026-11-27").unwrap(),
+            "---\ntitle: Now\nupdated: 2026-11-27\n---\n\ntext"
+        );
+        assert_eq!(with_updated("no front matter", "2026-11-27"), None);
+
+        let root = temp_dir("blog-now-stamp");
+        let path = root.join("now.md");
+        write(&path, "---\nupdated: 2026-01-01\n---\n");
+        stamp_updated(&path, "2026-11-27").unwrap();
+        assert_eq!(post(&path).unwrap().date.as_deref(), Some("2026-11-27"));
+        write(&path, "nothing");
+        assert_eq!(stamp_updated(&path, "2026-11-27").unwrap_err(), "now.md has no front matter");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn now_page_url_and_commit() {
+        let root = temp_dir("blog-now-url");
+        let now = root.join("now.md");
+        write(&now, "---\ntitle: Now\n---\n");
+        assert_eq!(post_url(&root, "jan/blog", &now).as_deref(), Some("https://jan.github.io/blog/now/"));
+        write(&now, "---\npermalink: \"jetzt/\"\n---\n");
+        fs::write(root.join("CNAME"), "blog.example.org").unwrap();
+        assert_eq!(post_url(&root, "jan/blog", &now).as_deref(), Some("https://blog.example.org/jetzt/"));
+        assert_eq!(commit_now_cmd("now: update"), "git add -A -- now.md && git commit -m 'now: update' && git push");
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

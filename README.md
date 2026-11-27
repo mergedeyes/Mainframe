@@ -74,7 +74,8 @@ unless you ask for it.
   worktrees, measured as on disk on compressed btrfs.
 - **Blog:** in your Jekyll blog repo, `L` lists drafts and posts; write them
   in a built-in Markdown editor with live preview and autosave, then publish,
-  push and get told when GitHub Pages has the post live.
+  push and get told when GitHub Pages has the post live. `n` keeps a /now
+  page, with its "updated" date set when you push it.
 
 ## Getting started
 

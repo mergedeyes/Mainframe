@@ -193,8 +193,9 @@ nothing. See [Blog](../guides/blog.md).
 | `Enter`, `e` | write in the built-in [post editor](#post-editor) |
 | `E` | edit in your own editor instead; the picker comes back afterwards |
 | `a` | new post: title, description, draft or post now; then the post editor |
+| `n` | the /now page in the post editor; writes `now.md` first when there's none |
 | `p` | publish a draft: move it to `_posts/` with today's date, commit and push (asks first) |
-| `P` | commit and push your changes to a post |
+| `P` | commit and push your changes to a post; on the /now page, set `updated:` to today first |
 | `u` | unpublish: move a post back to `_drafts/`, no commit |
 | `d`, Delete | move to the trash (asks first) |
 | `/` | filter; `Enter` keeps it, `Esc` clears it |
@@ -221,5 +222,5 @@ after you stop typing, and when you close it.
 | `Ctrl-S` | save now (also over changes made outside Mainframe) |
 | `Ctrl-R` | reload the file from disk |
 | `Ctrl-P` | preview on or off |
-| `Ctrl-G` | a draft: publish it (asks first); a post: commit and push your changes |
+| `Ctrl-G` | a draft: publish it (asks first); a post: commit and push your changes; the /now page: set `updated:` to today, commit and push |
 | `Esc`, `Ctrl-Q` | save and close, back to the picker |

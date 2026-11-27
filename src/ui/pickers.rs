@@ -202,7 +202,7 @@ pub(super) fn draw_blog_picker(f: &mut Frame, picker: &mut BlogPicker, area: Rec
     let keys = if picker.filtering {
         " type to filter · Enter keep · Esc clear "
     } else {
-        " ⏎ write · E own editor · a new · p publish · P push · u unpublish · d trash · / filter · Esc close "
+        " ⏎ write · E own editor · a new · n now · p publish · P push · u unpublish · d trash · / filter · Esc close "
     };
     let inner = popup_pane(f, rect, title, keys);
     let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
@@ -212,6 +212,7 @@ pub(super) fn draw_blog_picker(f: &mut Frame, picker: &mut BlogPicker, area: Rec
         let (drafts, posts) = picker.list.items.iter().fold((0, 0), |(d, p), post| match post.state {
             State::Draft => (d + 1, p),
             State::Post => (d, p + 1),
+            State::Now => (d, p),
         });
         f.render_widget(Line::from(format!(" {drafts} drafts · {posts} posts · / filters")).fg(DIM), input);
     } else {
@@ -230,7 +231,9 @@ pub(super) fn draw_blog_picker(f: &mut Frame, picker: &mut BlogPicker, area: Rec
             Line::from(vec![
                 Span::styled("  no drafts or posts yet · ", Style::new().fg(DIM)),
                 Span::styled("a", Style::new().fg(ACCENT).bold()),
-                Span::styled(" writes one", Style::new().fg(DIM)),
+                Span::styled(" writes one · ", Style::new().fg(DIM)),
+                Span::styled("n", Style::new().fg(ACCENT).bold()),
+                Span::styled(" a /now page", Style::new().fg(DIM)),
             ]),
             list_area,
         );
@@ -245,6 +248,7 @@ pub(super) fn draw_blog_picker(f: &mut Frame, picker: &mut BlogPicker, area: Rec
             let (state, color) = match p.state {
                 State::Draft => ("draft", Color::Yellow),
                 State::Post => ("post", Color::Green),
+                State::Now => ("now", Color::Cyan),
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{state:<6}"), Style::new().fg(color)),
