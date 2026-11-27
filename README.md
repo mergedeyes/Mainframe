@@ -18,10 +18,11 @@
 </p>
 
 Mainframe is a file browser for the terminal that knows what your projects
-are. Open a Rust, Go, Node, Python, Zig, CMake, Meson, Make or just project,
-and `b` builds it, `t` tests it, `r` runs it. Errors are one key away from
-your editor, every project keeps its own output, and your work goes to your
-PATH, a Raspberry Pi or a GitHub release without leaving the window.
+are. Open a Rust, Go, Node, Python, Zig, CMake, Meson, Make, just, .NET or
+Visual C++ project, and `b` builds it, `t` tests it, `r` runs it. Errors are
+one key away from your editor, every project keeps its own output, and your
+work goes to your PATH, a Raspberry Pi or a GitHub release without leaving
+the window.
 
 Everything it runs shows up in an output pane with the exact command first.
 Nothing happens behind your back, and nothing is written into your projects

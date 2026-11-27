@@ -27,6 +27,7 @@ explained.
 | `editor` | `"nano"` | the editor for `e` and `Enter`; anything that waits until you close it, like `"vim"` or `"micro"`. A program with spaces in its path goes in quotes: `'"C:\Program Files\Notepad++\notepad++.exe" -multiInst'` |
 | `vscode` | `"code"` | the command for `o` and `O` |
 | `shell` | `""` | the shell for commands you write: `:`, `[runners]` and `[[actions]]`. A name on your PATH or a full path, like `"bash"`, `"fish"`, `"pwsh"` or `"cmd"`; empty is `sh`, or PowerShell on Windows. See [Which shell runs what](#which-shell-runs-what) |
+| `vs_env` | `true` | Windows: commands run with Visual Studio's C++ build environment (`cl`, `link`, `INCLUDE`, `LIB`), as in a Developer PowerShell, when Visual Studio is installed and `cl` isn't on your PATH already; `false` leaves the environment as Mainframe found it |
 | `install_dir` | `"~/.local/bin"` | where `i` installs programs |
 | `projects_dir` | `""` | the projects folder for `J`; empty uses the first that exists of `~/Projekte`, `~/Projects`, `~/projects`, `~/Code`, `~/code`, `~/dev`, `~/src`, `~/repos` |
 | `show_hidden` | `true` | show hidden files at start (`.` toggles) |
