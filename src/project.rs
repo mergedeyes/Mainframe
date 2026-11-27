@@ -309,3 +309,61 @@ pub fn quote_str(s: &str) -> String {
 }
 
 pub use crate::platform::which;
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use crate::{run::testing::run_in, testutil::temp_dir};
+
+    fn entry(path: &Path) -> Entry {
+        Entry {
+            name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            path: path.to_path_buf(),
+            is_dir: false,
+            is_exec: false,
+            is_symlink: false,
+            size: 0,
+            modified: None,
+        }
+    }
+
+    /// Builds with the plans `b` and `R` use, in Visual Studio's environment.
+    #[test]
+    fn cmake_builds_debug_and_release_with_msvc() {
+        if !platform::msvc_available() || platform::which("cmake").is_none() {
+            return;
+        }
+        let dir = temp_dir("cmake-msvc");
+        fs::write(
+            dir.join("CMakeLists.txt"),
+            "cmake_minimum_required(VERSION 3.20)\nproject(hello C)\nadd_executable(hello main.c)\n",
+        )
+        .unwrap();
+        fs::write(dir.join("main.c"), "#include <stdio.h>\nint main(void) { puts(\"hi\"); return 0; }\n").unwrap();
+        let cfg = Config::default();
+        for (op, exe) in [(Op::Build, r"build\Debug\hello.exe"), (Op::Release, r"build-release\Release\hello.exe")] {
+            let plan = plan(op, None, &dir, &cfg).unwrap();
+            let (ok, out) = run_in(&plan.cmd, &plan.cwd);
+            assert!(ok, "{out}");
+            assert!(dir.join(exe).is_file(), "no {exe}:\n{out}");
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `r` on a C file: compiled with cl, then run.
+    #[test]
+    fn runs_a_c_file_with_cl() {
+        if !platform::msvc_available() {
+            return;
+        }
+        let dir = temp_dir("c-file");
+        let file = dir.join("hello.c");
+        fs::write(&file, "#include <stdio.h>\nint main(void) { puts(\"hello from cl\"); return 0; }\n").unwrap();
+        let plan = plan(Op::Run, Some(&entry(&file)), &dir, &Config::default()).unwrap();
+        let (ok, out) = run_in(&plan.cmd, &plan.cwd);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(ok, "{out}");
+        assert!(out.contains("hello from cl"), "{out}");
+        assert!(plan.cmd.display(&crate::shell::Shell::default()).starts_with("cl "), "{out}");
+    }
+}
