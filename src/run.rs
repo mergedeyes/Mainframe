@@ -328,7 +328,7 @@ fn in_dir(mut c: Command, dir: &Path) -> Command {
     c
 }
 
-fn builtin(b: &Builtin, ctx: &mut Ctx) -> Result<(), String> {
+pub fn builtin(b: &Builtin, ctx: &mut Ctx) -> Result<(), String> {
     match b {
         Builtin::Say(text) => {
             ctx.say(text);
@@ -377,6 +377,8 @@ fn builtin(b: &Builtin, ctx: &mut Ctx) -> Result<(), String> {
         }
         Builtin::FollowPages { repo, live } => crate::blog::follow_pages(ctx, repo, live),
         Builtin::InstallFile { src, dest } => crate::install::install_file(ctx, src, dest),
+        Builtin::Delete(paths) => crate::cleanup::delete(ctx, paths),
+        Builtin::Cleanup { jobs, what, expected } => crate::cleanup::clean(ctx, jobs, what, *expected),
         Builtin::RemoveFile(p) => {
             let pretty = crate::config::pretty_path(p);
             std::fs::remove_file(p).map_err(|e| format!("can't remove {pretty}: {e}"))?;

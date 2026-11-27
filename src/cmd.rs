@@ -93,6 +93,14 @@ pub enum Builtin {
         repo: String,
         live: String,
     },
+    /// Deletes files and folders, like `rm -rf`.
+    Delete(Vec<PathBuf>),
+    /// Runs `jobs`, then says how much room `what` freed on the disk (`expected` bytes, if known).
+    Cleanup {
+        jobs: Vec<Job>,
+        what: String,
+        expected: Option<u64>,
+    },
     /// Copies a program to where it's installed.
     InstallFile {
         src: PathBuf,
@@ -120,6 +128,11 @@ impl Builtin {
                 format!("install {} → {}", crate::config::pretty_path(src), crate::config::pretty_path(dest))
             }
             Builtin::RemoveFile(p) => format!("remove {}", crate::config::pretty_path(p)),
+            Builtin::Delete(paths) => {
+                let paths: Vec<_> = paths.iter().map(|p| crate::config::pretty_path(p)).collect();
+                format!("delete {}", paths.join(" "))
+            }
+            Builtin::Cleanup { what, .. } => format!("clean {what}"),
         }
     }
 }

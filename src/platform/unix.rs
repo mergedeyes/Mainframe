@@ -168,6 +168,26 @@ pub fn trash(path: &Path) -> io::Result<()> {
     Err(io::Error::other(if msg.is_empty() { format!("{program} failed") } else { msg }))
 }
 
+pub(super) fn free_space(path: &Path) -> Option<u64> {
+    let c = CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: c is a valid C string and st a statvfs to fill.
+    unsafe {
+        let mut st: libc::statvfs = std::mem::zeroed();
+        (libc::statvfs(c.as_ptr(), &mut st) == 0).then(|| st.f_bavail as u64 * st.f_frsize as u64)
+    }
+}
+
+pub(super) fn flush(path: &Path) {
+    #[cfg(target_os = "linux")]
+    if let Ok(f) = std::fs::File::open(path) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: f is an open file descriptor.
+        unsafe { libc::syncfs(f.as_raw_fd()) };
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = path;
+}
+
 pub(super) fn disk_use(_path: &Path, meta: &Metadata) -> DiskUse {
     let id = (!meta.is_dir() && meta.nlink() > 1).then(|| (meta.dev(), meta.ino()));
     DiskUse { id, bytes: meta.blocks() * 512 }

@@ -36,10 +36,7 @@ pub(super) fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect
                 Span::styled("  btrfs compression, estimated from samples", Style::new().fg(DIM)),
             ]));
         }
-        details.push(Line::from(vec![
-            label("runs"),
-            Span::styled(truncate(&item.command(&picker.root), 90), Style::new().fg(DIM)),
-        ]));
+        details.push(Line::from(vec![label("runs"), Span::styled(truncate(&runs(item), 90), Style::new().fg(DIM))]));
     }
     if !picker.marked.is_empty() {
         let chosen = picker.chosen();
@@ -79,4 +76,10 @@ pub(super) fn draw_cleanup(f: &mut Frame, picker: &mut CleanupPicker, area: Rect
         .collect();
     f.render_stateful_widget(list(rows), list_area, &mut picker.state);
     f.render_widget(Paragraph::new(details), details_area);
+}
+
+/// What clearing `item` does, as one line.
+fn runs(item: &crate::cleanup::Item) -> String {
+    let shell = crate::shell::Shell::default();
+    item.jobs().iter().map(|j| j.display(&shell)).collect::<Vec<_>>().join(" && ")
 }

@@ -2,7 +2,6 @@
 
 use std::{
     collections::BTreeSet,
-    fs,
     path::PathBuf,
     sync::mpsc::{self, Receiver},
     thread,
@@ -18,7 +17,7 @@ use super::{App, Confirmed, Level, Mode};
 use crate::{
     cleanup::{self, Item},
     config, filter_list,
-    project::{self, Plan, quote},
+    project::{self, Plan},
 };
 
 pub struct CleanupPicker {
@@ -146,19 +145,10 @@ impl App {
         let what = cleanup::summary(&chosen);
         // A size is only promised when every row was measured (a project's own clean target isn't).
         let size = chosen.iter().all(|i| i.size.is_some()).then(|| cleanup::total(&chosen));
-        let steps: Vec<String> = chosen.iter().map(|i| i.command(&root)).collect();
-        // A script file, so the output pane shows one short command line.
-        let file = config::state_dir()
-            .join("cleanup")
-            .join(format!("{}.sh", config::pretty_path(&root).replace(|c: char| !c.is_ascii_alphanumeric(), "-")));
-        let written = file
-            .parent()
-            .map_or(Ok(()), fs::create_dir_all)
-            .and_then(|_| fs::write(&file, cleanup::script(&steps, &what, size)));
-        if let Err(e) = written {
-            return self.set_status(format!("can't write {}: {e}", config::pretty_path(&file)), Level::Err);
-        }
-        let plan = Plan { cmd: crate::cmd::Cmd::Sh(format!("sh {}", quote(&file))), cwd: root };
+        let jobs = chosen.iter().flat_map(|i| i.jobs()).collect();
+        let expected = size.map(|u| u.freed());
+        let cleanup = crate::cmd::Builtin::Cleanup { jobs, what: what.clone(), expected };
+        let plan = Plan { cmd: cleanup.into(), cwd: root };
         let label = if chosen.len() == 1 { format!("clean {what}") } else { format!("clean {} things", chosen.len()) };
         let sized = match size {
             Some(u) => format!("{what} ({})", u.long()),

@@ -17,7 +17,7 @@ use windows_sys::Win32::{
     Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
         FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileStandardInfo,
-        GetFileInformationByHandle, GetFileInformationByHandleEx,
+        GetDiskFreeSpaceExW, GetFileInformationByHandle, GetFileInformationByHandleEx,
     },
     System::{
         JobObjects::{AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject},
@@ -224,6 +224,17 @@ pub fn trash(path: &Path) -> io::Result<()> {
         Err(io::Error::other(format!("couldn't move it to the Recycle Bin (error {code:#x})")))
     }
 }
+
+pub(super) fn free_space(path: &Path) -> Option<u64> {
+    let dir = wide(path.as_os_str());
+    let mut free = 0u64;
+    // SAFETY: dir is NUL-terminated; the other outputs may be null.
+    let ok = unsafe { GetDiskFreeSpaceExW(dir.as_ptr(), &mut free, ptr::null_mut(), ptr::null_mut()) };
+    (ok != 0).then_some(free)
+}
+
+/// NTFS counts a deleted file's room as free right away.
+pub(super) fn flush(_path: &Path) {}
 
 /// Allocated size (what Explorer calls "size on disk": clusters, NTFS compression, files
 /// small enough to live in the MFT taking none), and the file's id when it's hard-linked,
