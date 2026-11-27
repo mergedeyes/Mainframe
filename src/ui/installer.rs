@@ -19,9 +19,9 @@ use crate::{
 use super::{ACCENT, DIM, list, popup, popup_pane, truncate};
 
 /// "pulls, then " in front of what an install does, when `p` started it.
-fn pulls(before: &Option<String>) -> &'static str {
+fn pulls(before: &Option<Vec<crate::cmd::Step>>) -> &'static str {
     match before {
-        Some(b) if b.contains("cargo build") => "pulls, rebuilds, then ",
+        Some(b) if b.iter().any(|s| s.program == "cargo") => "pulls, rebuilds, then ",
         Some(_) => "pulls, then ",
         None => "",
     }
@@ -121,7 +121,7 @@ pub(super) fn draw_install(f: &mut Frame, picker: &mut InstallPicker, area: Rect
         None => vec![
             Line::from(vec![
                 label("runs"),
-                Span::raw(install::cargo_install_cmd(&picker.install_dir)),
+                Span::raw(install::cargo_install(&picker.install_dir).display(&crate::shell::Shell::default())),
                 Span::styled("  (release build, may take a while)", Style::new().fg(DIM)),
             ]),
             Line::from(vec![label("installs"), Span::raw(format!("{}/<bin name>", pretty_path(&picker.install_dir)))]),

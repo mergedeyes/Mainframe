@@ -61,19 +61,44 @@ pub enum Builtin {
     /// Waits, unless the task is stopped.
     Sleep(u64),
     /// Deletes local branches whose remote branch is gone, when their work is in `base`.
-    PruneGoneBranches { base: String },
+    PruneGoneBranches {
+        base: String,
+    },
     /// A command line the user wrote (release checks), in their shell.
     RunShell(String),
     /// Sets the first `version = "…"` line of `file`.
-    SetVersion { file: String, version: String },
+    SetVersion {
+        file: String,
+        version: String,
+    },
     /// Stops unless the manifest `file` is at `version`, with `why`.
-    RequireVersion { file: String, version: String, why: String },
+    RequireVersion {
+        file: String,
+        version: String,
+        why: String,
+    },
     /// Deletes `branch` here and on `remote`, where it's still there.
-    DeleteBranch { remote: String, branch: String },
+    DeleteBranch {
+        remote: String,
+        branch: String,
+    },
     /// Follows the CI run a pushed release tag started, then shows the release.
-    WatchRelease { repo: Option<String>, workflow: String, tag: String },
+    WatchRelease {
+        repo: Option<String>,
+        workflow: String,
+        tag: String,
+    },
     /// Waits for the GitHub Pages build of HEAD, then says `live`.
-    FollowPages { repo: String, live: String },
+    FollowPages {
+        repo: String,
+        live: String,
+    },
+    /// Copies a program to where it's installed.
+    InstallFile {
+        src: PathBuf,
+        dest: PathBuf,
+    },
+    RemoveFile(PathBuf),
 }
 
 impl Builtin {
@@ -91,6 +116,10 @@ impl Builtin {
             Builtin::DeleteBranch { remote, branch } => format!("delete {branch} (also on {remote})"),
             Builtin::WatchRelease { workflow, tag, .. } => format!("follow the {workflow} run of {tag}"),
             Builtin::FollowPages { .. } => "wait for the GitHub Pages build".into(),
+            Builtin::InstallFile { src, dest } => {
+                format!("install {} → {}", crate::config::pretty_path(src), crate::config::pretty_path(dest))
+            }
+            Builtin::RemoveFile(p) => format!("remove {}", crate::config::pretty_path(p)),
         }
     }
 }

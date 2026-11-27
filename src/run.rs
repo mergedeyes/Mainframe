@@ -376,6 +376,13 @@ fn builtin(b: &Builtin, ctx: &mut Ctx) -> Result<(), String> {
             Ok(())
         }
         Builtin::FollowPages { repo, live } => crate::blog::follow_pages(ctx, repo, live),
+        Builtin::InstallFile { src, dest } => crate::install::install_file(ctx, src, dest),
+        Builtin::RemoveFile(p) => {
+            let pretty = crate::config::pretty_path(p);
+            std::fs::remove_file(p).map_err(|e| format!("can't remove {pretty}: {e}"))?;
+            ctx.say(format!("removed {pretty}"));
+            Ok(())
+        }
         Builtin::WatchRelease { repo, workflow, tag } => {
             crate::release::watch_release(ctx, repo.as_deref(), workflow, tag)
         }
