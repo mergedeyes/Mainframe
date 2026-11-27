@@ -772,8 +772,12 @@ mod tests {
         assert_eq!(items[0].command(&root), "rm -rf -- node_modules");
         assert_eq!(items[3].command(&root), "npm run clean");
         assert_eq!(items[3].size, None);
-        assert_eq!(items[4].command(&root), "rm -rf -- old/target");
-        assert_eq!(items[5].command(&root), "rm -rf -- tools/web/node_modules");
+        // Git's sh on Windows takes either separator.
+        let unix = |s: String| {
+            s.replace(r"'old\target'", "old/target").replace(r"'tools\web\node_modules'", "tools/web/node_modules")
+        };
+        assert_eq!(unix(items[4].command(&root)), "rm -rf -- old/target");
+        assert_eq!(unix(items[5].command(&root)), "rm -rf -- tools/web/node_modules");
         assert_eq!(items[6].command(&root), format!("rm -rf -- {}", quote(&wt.join("node_modules"))));
         assert_eq!(items[7].command(&root), format!("(cd {} && npm run clean)", quote(&wt)));
     }
