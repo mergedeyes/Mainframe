@@ -24,7 +24,11 @@ pub(super) fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
             };
             (steps, "create", "command", ("  $  ", "  && "))
         }
-        FormKind::Release(ctx) => (crate::release::steps(form, ctx), "release", "command", ("  $  ", "  && ")),
+        FormKind::Release(ctx) => {
+            let shell = crate::shell::Shell::default();
+            let steps = crate::release::steps(form, ctx).iter().map(|j| j.display(&shell)).collect();
+            (steps, "release", "command", ("  $  ", "  && "))
+        }
         FormKind::Deploy { root, keep_build, .. } => (
             crate::app::deploy_from_form(form).summary(root, *keep_build),
             "save",

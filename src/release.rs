@@ -10,11 +10,13 @@ use std::{
 };
 
 use crate::{
+    cmd::{Builtin, Cmd, Job, Step},
     config::dir_name,
     form::{Field, Form, FormKind},
     git::{git, git_lines as lines},
     proc,
-    project::{quote_str, which},
+    project::which,
+    run::Ctx as Run,
 };
 
 /// Bump on a branch, open a PR and merge it right away.
@@ -58,27 +60,52 @@ impl Manifest {
         self.files[0]
     }
 
-    fn bump(&self, v: &str) -> String {
+    fn bump(&self, v: &str) -> Vec<Job> {
         let lock = self.files.len() > 1;
-        // The first `version = "…"` line, which `detect` checked is the package's.
-        let sed = |file: &str| format!("sed -i '0,/^version = \".*\"/s//version = \"{v}\"/' {file}");
+        let set = || Builtin::SetVersion { file: self.file().into(), version: v.into() }.into();
         match self.kind {
-            Kind::Cargo if lock => format!("{} && cargo update --workspace --offline", sed("Cargo.toml")),
-            Kind::Cargo => sed("Cargo.toml"),
-            Kind::Npm => format!("npm version {v} --no-git-tag-version"),
-            Kind::Python if lock => format!("{} && uv lock", sed("pyproject.toml")),
-            Kind::Python => sed("pyproject.toml"),
+            Kind::Cargo if lock => vec![set(), Step::words("cargo update --workspace --offline").into()],
+            Kind::Npm => vec![Step::new("npm").args(["version", v, "--no-git-tag-version"]).into()],
+            Kind::Python if lock => vec![set(), Step::words("uv lock").into()],
+            Kind::Cargo | Kind::Python => vec![set()],
         }
     }
 
     /// Stops the release unless the (just pulled) manifest is at `v`: the bump PR is merged.
-    fn guard(&self, v: &str, main: &str) -> String {
-        let pattern = match self.kind {
-            Kind::Npm => format!("\"version\": \"{v}\""),
-            _ => format!("^version = \"{v}\""),
-        };
-        let why = quote_str(&format!("{} on {main} isn't at {v} yet — is the release PR merged?", self.file()));
-        format!("{{ grep -q '{pattern}' {} || {{ echo {why} >&2; false; }}; }}", self.file())
+    fn guard(&self, v: &str, main: &str) -> Job {
+        Builtin::RequireVersion {
+            file: self.file().into(),
+            version: v.into(),
+            why: format!("{} on {main} isn't at {v} yet — is the release PR merged?", self.file()),
+        }
+        .into()
+    }
+}
+
+/// The first `version = "…"` line set to `version`, the rest of the file as it was;
+/// None when there's no such line.
+pub fn set_version_line(text: &str, version: &str) -> Option<String> {
+    const KEY: &str = "version = \"";
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        if line.starts_with(KEY) {
+            let value = start + KEY.len();
+            let end = value + text[value..].find('"')?;
+            return Some(format!("{}{version}{}", &text[..value], &text[end..]));
+        }
+        start += line.len();
+    }
+    None
+}
+
+/// Whether the manifest is at `version`: package.json's `"version"`, else the first
+/// `version = "…"` line.
+pub fn manifest_has_version(file: &str, text: &str, version: &str) -> bool {
+    if file.ends_with(".json") {
+        text.contains(&format!("\"version\": \"{version}\""))
+    } else {
+        let set = format!("version = \"{version}\"");
+        text.lines().find(|l| l.starts_with("version = \"")).is_some_and(|l| l.starts_with(&set))
     }
 }
 
@@ -143,8 +170,8 @@ pub fn github_repo(url: &str) -> Option<String> {
     (repo.split('/').count() == 2).then(|| repo.to_string())
 }
 
-/// True when the first line starting `version = "` sets exactly `version`, so the sed in
-/// `Manifest::bump` changes the right line.
+/// True when the first line starting `version = "` sets exactly `version`, so the bump
+/// changes the right line.
 fn first_version_line_is(text: &str, version: &str) -> bool {
     text.lines().find(|l| l.starts_with("version = \"")) == Some(&format!("version = \"{version}\""))
 }
@@ -498,21 +525,26 @@ pub fn check(form: &Form, ctx: &Ctx) -> Result<(), String> {
     Ok(())
 }
 
-/// The release as shell steps, shown one per line in the form and run joined with `&&`.
-pub fn steps(form: &Form, ctx: &Ctx) -> Vec<String> {
+/// The release, shown one step per line in the form and run one after another.
+pub fn steps(form: &Form, ctx: &Ctx) -> Vec<Job> {
     let v = form.get("version").trim();
     let tag = ctx.tag(v);
-    let remote = quote_str(form.get("remote"));
-    let main = quote_str(&ctx.main);
-    let r = ctx.repo(form.get("remote")).map(|repo| format!(" -R {repo}")).unwrap_or_default();
-    let msg = quote_str(&format!("Release {v}"));
+    let remote = form.get("remote").to_string();
+    let main = ctx.main.clone();
+    let repo = ctx.repo(&remote).map(str::to_string);
+    let gh = |args: &[&str]| {
+        let step = Step::new("gh").args(args.iter().copied());
+        match &repo {
+            Some(r) => step.args(["-R", r]),
+            None => step,
+        }
+    };
+    let git = |args: &[&str]| Step::git().args(args.iter().copied());
+    let msg = format!("Release {v}");
     let bump = form.get("bump");
-
     let br = format!("release/{v}");
-    // Left over from `open PR`, or made by `merge PR`; GitHub may have deleted it already.
-    let cleanup = format!("{{ git branch -d {br} 2>/dev/null; git push {remote} --delete {br} 2>/dev/null; true; }}");
 
-    let mut s = vec![format!("git switch {main} && git pull --ff-only {remote} {main}")];
+    let mut s: Vec<Job> = vec![git(&["switch", &main]).into(), git(&["pull", "--ff-only", &remote, &main]).into()];
     if bump == DONE
         && let Some(m) = &ctx.manifest
     {
@@ -520,85 +552,148 @@ pub fn steps(form: &Form, ctx: &Ctx) -> Vec<String> {
     }
     let bumping = ctx.manifest.as_ref().filter(|_| [MERGE_PR, OPEN_PR, COMMIT].contains(&bump));
     if let Some(m) = bumping {
-        s.push(m.bump(v));
+        s.extend(m.bump(v));
     }
     let checks = form.get("checks").trim();
     if !checks.is_empty() {
-        s.push(checks.to_string());
+        s.push(Builtin::RunShell(checks.to_string()).into());
     }
     if let Some(m) = bumping {
-        let files = m.files.join(" ");
+        let commit = git(&["commit", "-m", &msg, "--"]).args(m.files.iter().copied());
         if bump == COMMIT {
-            s.push(format!("git commit -m {msg} -- {files} && git push {remote} {main}"));
+            s.push(commit.into());
+            s.push(git(&["push", &remote, &main]).into());
         } else {
-            s.push(format!("git switch -c {br} && git commit -m {msg} -- {files} && git push {remote} {br}"));
-            let body = quote_str(&format!("Sets the version to {v}."));
-            s.push(format!("gh pr create{r} -B {main} -H {br} -t {msg} -b {body}"));
+            s.push(git(&["switch", "-c", &br]).into());
+            s.push(commit.into());
+            s.push(git(&["push", &remote, &br]).into());
+            let body = format!("Sets the version to {v}.");
+            s.push(gh(&["pr", "create", "-B", &main, "-H", &br, "-t", &msg, "-b", &body]).into());
         }
         if bump == OPEN_PR {
             // Merging is the user's, on GitHub, once CI is happy; tagging waits for the next g r.
             if ctx.pr_checks {
-                s.push(format!("{{ sleep 10 && gh pr checks {br}{r} --watch -i 20; true; }}"));
+                // The checks show up a few seconds after the PR.
+                s.push(Builtin::Sleep(10).into());
+                s.push(gh(&["pr", "checks", &br, "--watch", "-i", "20"]).may_fail().into());
             }
             let next = if ctx.pr_checks { "Next: once the checks pass, merge" } else { "Next: merge" };
-            s.push(format!(
-                "echo && echo {}",
-                quote_str(&format!(
+            s.push(Builtin::Say(String::new()).into());
+            s.push(
+                Builtin::Say(format!(
                     "{next} the PR on GitHub (link above), then g r again: it tags {tag} and releases."
                 ))
-            ));
+                .into(),
+            );
             return s;
         }
         if bump == MERGE_PR {
-            s.push(format!("gh pr merge {br}{r} --merge && git switch {main} && git pull --ff-only {remote} {main}"));
+            s.push(gh(&["pr", "merge", &br, "--merge"]).into());
+            s.push(git(&["switch", &main]).into());
+            s.push(git(&["pull", "--ff-only", &remote, &main]).into());
         }
     }
-    s.push(format!("git tag {tag} && git push {remote} {tag}"));
+    s.push(git(&["tag", &tag]).into());
+    s.push(git(&["push", &remote, &tag]).into());
     if bump == MERGE_PR || ctx.release_branches.contains(&br) {
-        s.push(cleanup);
+        // Left over from `open PR`, or made by `merge PR`; GitHub may have deleted it already.
+        s.push(Builtin::DeleteBranch { remote: remote.clone(), branch: br }.into());
     }
 
     match form.get("then") {
-        WATCH => {
-            let wf = ctx.workflow.as_deref().unwrap_or_default();
-            // The run shows up a few seconds after the push.
-            s.push(format!(
-                "id= && for i in $(seq 20); do id=$(gh run list{r} -w {wf} -b {tag} -c $(git rev-parse HEAD) -L 1 \
-                 --json databaseId -q '.[0].databaseId'); [ -n \"$id\" ] && break; sleep 3; done"
-            ));
-            s.push(format!("gh run watch \"$id\"{r} -i 20 --exit-status && gh release view {tag}{r}"));
-        }
+        WATCH => s.push(Builtin::WatchRelease { repo, workflow: ctx.workflow.clone().unwrap_or_default(), tag }.into()),
         GH_RELEASE => {
             let name = ctx.manifest.as_ref().map_or_else(|| dir_name(&ctx.root), |m| m.name.clone());
             let mut title = name.chars();
             let title = title.next().map(|c| c.to_uppercase().chain(title).collect::<String>()).unwrap_or_default();
-            s.push(format!(
-                "gh release create {tag}{r} --title {} --generate-notes --verify-tag",
-                quote_str(&format!("{title} {v}"))
-            ));
+            let title = format!("{title} {v}");
+            s.push(gh(&["release", "create", &tag, "--title", &title, "--generate-notes", "--verify-tag"]).into());
         }
         _ => {}
     }
     s
 }
 
+/// The release workflow the tag push started: found once GitHub lists it (a few seconds
+/// after the push), followed to the end, then the release it made.
+pub fn watch_release(run: &mut Run, repo: Option<&str>, workflow: &str, tag: &str) -> Result<(), String> {
+    let gh = |args: &[&str]| {
+        let step = Step::new("gh").args(args.iter().copied());
+        match repo {
+            Some(r) => step.args(["-R", r]),
+            None => step,
+        }
+    };
+    let head = run.ask(&Step::words("git rev-parse HEAD")).ok_or("git rev-parse HEAD failed")?;
+    run.say(format!("waiting for the {workflow} run of {tag} …"));
+    let list = gh(&[
+        "run",
+        "list",
+        "-w",
+        workflow,
+        "-b",
+        tag,
+        "-c",
+        &head,
+        "-L",
+        "1",
+        "--json",
+        "databaseId",
+        "-q",
+        ".[0].databaseId",
+    ]);
+    let mut id = None;
+    for _ in 0..20 {
+        if let Some(found) = run.ask(&list).filter(|s| !s.is_empty()) {
+            id = Some(found);
+            break;
+        }
+        if !run.sleep(std::time::Duration::from_secs(3)) {
+            return Err("stopped".into());
+        }
+    }
+    let id = id.ok_or_else(|| format!("no {workflow} run for {tag} showed up — gh run list shows what ran"))?;
+    run.must(&gh(&["run", "watch", &id, "-i", "20", "--exit-status"]), || format!("the {workflow} run failed"))?;
+    run.must(&gh(&["release", "view", tag]), || format!("no release {tag} — did the workflow make one?"))
+}
+
 /// `g R`: the latest releases and CI runs.
-pub fn overview(root: &Path) -> Result<String, String> {
+pub fn overview(root: &Path) -> Result<Cmd, String> {
     if which("gh").is_none() {
         return Err("gh (GitHub CLI) is not installed".into());
     }
     let names = lines(root, &["remote"]);
-    let r = default_remote(root, &names)
+    let repo = default_remote(root, &names)
         .and_then(|rem| first_line(root, &["remote", "get-url", &rem]))
-        .and_then(|u| github_repo(&u))
-        .map(|repo| format!(" -R {repo}"))
-        .unwrap_or_default();
-    Ok(format!("gh release list{r} -L 10 && echo && gh run list{r} -L 15"))
+        .and_then(|u| github_repo(&u));
+    let gh = |args: &str| {
+        let step = Step::words(args);
+        match &repo {
+            Some(r) => step.args(["-R", r]),
+            None => step,
+        }
+    };
+    Ok(Cmd::Steps(vec![
+        gh("gh release list -L 10").into(),
+        Builtin::Say(String::new()).into(),
+        gh("gh run list -L 15").into(),
+    ]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bumps_only_the_first_version_line() {
+        let toml = "[package]\nname = \"x\"\nversion = \"1.2.3\" # keep me\r\n\n[dependencies]\nversion = \"9\"\n";
+        let new = set_version_line(toml, "1.3.0").unwrap();
+        assert_eq!(new, toml.replacen("1.2.3", "1.3.0", 1));
+        assert!(manifest_has_version("Cargo.toml", &new, "1.3.0"));
+        assert!(!manifest_has_version("Cargo.toml", toml, "1.3.0"));
+        assert_eq!(set_version_line("[package]\nname = \"x\"\n", "1.0.0"), None);
+        assert!(manifest_has_version("package.json", "{\n  \"version\": \"2.0.0\"\n}", "2.0.0"));
+    }
 
     #[test]
     fn versions() {
@@ -661,5 +756,46 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(tag.as_deref(), Some("release.yaml"));
         assert_eq!(pr.as_deref(), Some("ci.yml"));
+    }
+
+    /// A whole release without GitHub: bump, commit, push, tag, push the tag.
+    #[test]
+    fn commit_release_bumps_tags_and_pushes() {
+        use crate::testutil::{git as tgit, temp_dir};
+        let base = temp_dir("release-run");
+        let (repo, remote) = (base.join("repo"), base.join("remote.git"));
+        fs::create_dir_all(&repo).unwrap();
+        tgit(&base, &["init", "-q", "--bare", "-b", "main", "remote.git"]);
+        tgit(&repo, &["init", "-q", "-b", "main"]);
+        tgit(&repo, &["config", "user.name", "t"]);
+        tgit(&repo, &["config", "user.email", "t@t"]);
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
+        tgit(&repo, &["add", "-A"]);
+        tgit(&repo, &["commit", "-q", "-m", "one"]);
+        tgit(&repo, &["remote", "add", "origin", &remote.to_string_lossy()]);
+        tgit(&repo, &["push", "-q", "-u", "origin", "main"]);
+
+        let mut form = form(&repo, "main", false).unwrap();
+        for f in &mut form.fields {
+            match f.label {
+                "version" => f.default = "0.2.0".into(),
+                "checks" => f.default = String::new(),
+                "bump" => f.choice = f.options.iter().position(|o| o == COMMIT).unwrap(),
+                "then" => f.choice = f.options.iter().position(|o| o == "tag only").unwrap(),
+                _ => {}
+            }
+        }
+        let FormKind::Release(ctx) = &form.kind else { panic!("not a release form") };
+        check(&form, ctx).unwrap();
+        let (ok, out) = crate::run::testing::run_in(&Cmd::Steps(steps(&form, ctx)), &repo);
+        let manifest = fs::read_to_string(repo.join("Cargo.toml")).unwrap();
+        let tagged = tgit(&remote, &["log", "-1", "--format=%s", "v0.2.0"]);
+        let main = tgit(&remote, &["log", "-1", "--format=%s", "main"]);
+        fs::remove_dir_all(&base).unwrap();
+
+        assert!(ok, "{out}");
+        assert!(manifest.contains("version = \"0.2.0\""), "{manifest}");
+        assert_eq!(tagged.trim(), "Release 0.2.0");
+        assert_eq!(main.trim(), "Release 0.2.0");
     }
 }

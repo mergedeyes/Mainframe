@@ -62,6 +62,16 @@ pub enum Builtin {
     Sleep(u64),
     /// Deletes local branches whose remote branch is gone, when their work is in `base`.
     PruneGoneBranches { base: String },
+    /// A command line the user wrote (release checks), in their shell.
+    RunShell(String),
+    /// Sets the first `version = "…"` line of `file`.
+    SetVersion { file: String, version: String },
+    /// Stops unless the manifest `file` is at `version`, with `why`.
+    RequireVersion { file: String, version: String, why: String },
+    /// Deletes `branch` here and on `remote`, where it's still there.
+    DeleteBranch { remote: String, branch: String },
+    /// Follows the CI run a pushed release tag started, then shows the release.
+    WatchRelease { repo: Option<String>, workflow: String, tag: String },
 }
 
 impl Builtin {
@@ -73,6 +83,11 @@ impl Builtin {
             Builtin::PruneGoneBranches { base } => {
                 format!("delete branches whose remote branch is gone and whose work is in {base}")
             }
+            Builtin::RunShell(line) => line.clone(),
+            Builtin::SetVersion { file, version } => format!("set version = \"{version}\" in {file}"),
+            Builtin::RequireVersion { file, version, .. } => format!("check that {file} is at {version}"),
+            Builtin::DeleteBranch { remote, branch } => format!("delete {branch} (also on {remote})"),
+            Builtin::WatchRelease { workflow, tag, .. } => format!("follow the {workflow} run of {tag}"),
         }
     }
 }

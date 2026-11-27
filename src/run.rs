@@ -342,6 +342,42 @@ fn builtin(b: &Builtin, ctx: &mut Ctx) -> Result<(), String> {
             }
         }
         Builtin::PruneGoneBranches { base } => crate::git::prune_gone_branches(ctx, base),
+        Builtin::RunShell(line) => {
+            ctx.say(format!("{DIM}$ {line}{RESET}"));
+            let command = in_dir(ctx.shell.command(line), &ctx.cwd.clone());
+            let name = ctx.shell.program.to_string_lossy().into_owned();
+            match ctx.spawn(command, &name) {
+                e if e.ok() => Ok(()),
+                Exit::Killed => Err("stopped".into()),
+                _ => Err(format!("{line} failed")),
+            }
+        }
+        Builtin::SetVersion { file, version } => {
+            let path = ctx.cwd.join(file);
+            let text = std::fs::read_to_string(&path).map_err(|e| format!("can't read {file}: {e}"))?;
+            let new = crate::release::set_version_line(&text, version)
+                .ok_or_else(|| format!("no version = \"…\" line in {file}"))?;
+            std::fs::write(&path, new).map_err(|e| format!("can't write {file}: {e}"))?;
+            ctx.say(format!("version = \"{version}\" in {file}"));
+            Ok(())
+        }
+        Builtin::RequireVersion { file, version, why } => {
+            let text = std::fs::read_to_string(ctx.cwd.join(file)).map_err(|e| format!("can't read {file}: {e}"))?;
+            if crate::release::manifest_has_version(file, &text, version) { Ok(()) } else { Err(why.clone()) }
+        }
+        Builtin::DeleteBranch { remote, branch } => {
+            // Quietly: either may be gone already.
+            if ctx.ask(&Step::new("git").args(["branch", "-d", branch])).is_some() {
+                ctx.say(format!("deleted branch {branch}"));
+            }
+            if ctx.ask(&Step::new("git").args(["push", remote, "--delete", branch])).is_some() {
+                ctx.say(format!("deleted {branch} on {remote}"));
+            }
+            Ok(())
+        }
+        Builtin::WatchRelease { repo, workflow, tag } => {
+            crate::release::watch_release(ctx, repo.as_deref(), workflow, tag)
+        }
     }
 }
 
