@@ -3,7 +3,6 @@ use std::{
     ffi::OsString,
     fs,
     io::Read,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -104,9 +103,7 @@ impl Browser {
                     // Follow symlinks for dir/exec detection.
                     let meta = fs::metadata(&path).or_else(|_| de.metadata());
                     let (is_dir, is_exec, size, modified) = match meta {
-                        Ok(m) => {
-                            (m.is_dir(), m.is_file() && m.permissions().mode() & 0o111 != 0, m.len(), m.modified().ok())
-                        }
+                        Ok(m) => (m.is_dir(), crate::platform::is_executable(&path, &m), m.len(), m.modified().ok()),
                         Err(_) => (false, false, 0, None),
                     };
                     self.entries.push(Entry { name, path, is_dir, is_exec, is_symlink, size, modified });

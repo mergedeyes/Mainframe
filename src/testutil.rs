@@ -2,7 +2,6 @@
 
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -30,7 +29,9 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 /// Writes an executable `bin/name` running `script`, to put in front of PATH.
+#[cfg(unix)]
 pub fn stub(bin: &Path, name: &str, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
     fs::create_dir_all(bin).unwrap();
     let path = bin.join(name);
     fs::write(&path, script).unwrap();

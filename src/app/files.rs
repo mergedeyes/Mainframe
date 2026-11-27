@@ -4,14 +4,11 @@ use std::{
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 use super::{App, Confirmed, Level, Mode};
-use crate::{
-    config,
-    project::{self, quote},
-};
+use crate::{config, platform, project::quote};
 
 impl App {
     pub(super) fn after_create(&mut self, path: &Path, res: std::io::Result<()>) {
@@ -56,7 +53,7 @@ impl App {
         if paths.is_empty() {
             return;
         }
-        let verb = if trash_cmd().is_some() { "Trash" } else { "Permanently delete" };
+        let verb = if platform::trash_available() { "Trash" } else { "Permanently delete" };
         let what = match paths.as_slice() {
             [p] if p.is_dir() => format!("{} and everything in it", describe(&paths)),
             _ => describe(&paths),
@@ -65,13 +62,15 @@ impl App {
     }
 
     pub(super) fn delete(&mut self, paths: &[PathBuf]) {
-        let trash = trash_cmd();
+        let trash = platform::trash_available();
         let mut failed = None;
         for path in paths {
-            let res = match trash {
-                Some(cmd) => run_quiet(&format!("{cmd} {}", quote(path))),
-                None if path.is_dir() && !path.is_symlink() => fs::remove_dir_all(path),
-                None => fs::remove_file(path),
+            let res = if trash {
+                platform::trash(path)
+            } else if path.is_dir() && !path.is_symlink() {
+                fs::remove_dir_all(path)
+            } else {
+                fs::remove_file(path)
             };
             match res {
                 Ok(()) => drop(self.browser.marked.remove(path)),
@@ -176,18 +175,8 @@ fn unique_name(path: &Path) -> PathBuf {
         .unwrap()
 }
 
-pub(super) fn trash_cmd() -> Option<&'static str> {
-    if project::which("gio").is_some() {
-        Some("gio trash --")
-    } else if project::which("trash-put").is_some() {
-        Some("trash-put --")
-    } else {
-        None
-    }
-}
-
 pub(super) fn run_quiet(cmd: &str) -> std::io::Result<()> {
-    let out = Command::new("sh").arg("-c").arg(cmd).stdin(Stdio::null()).output()?;
+    let out = platform::shell(cmd).stdin(Stdio::null()).output()?;
     if out.status.success() {
         Ok(())
     } else {

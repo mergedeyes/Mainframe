@@ -5,7 +5,6 @@ use crate::desktop::DesktopPlan;
 use std::{
     fs::{self, File},
     io::Read,
-    os::unix::fs::PermissionsExt,
     path::{Component, Path, PathBuf},
     time::SystemTime,
 };
@@ -105,7 +104,7 @@ fn walk(
         }
         let Ok(meta) = de.metadata() else { continue };
         let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        let exec = meta.permissions().mode() & 0o111 != 0 || name.ends_with(".exe");
+        let exec = crate::platform::is_executable(&path, &meta) || name.ends_with(".exe");
         if exec && !is_library(&name) {
             found.push((path, meta.len(), modified));
         } else if !in_target && modified > *newest_src && is_cargo_input(root, &path) {

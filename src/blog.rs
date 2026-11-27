@@ -323,15 +323,7 @@ pub fn slug(title: &str) -> String {
 
 /// Today in local time, as `YYYY-MM-DD`.
 pub fn today() -> String {
-    // SAFETY: `time` and `localtime_r` only write to the `tm` handed to them.
-    unsafe {
-        let now = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&now, &mut tm).is_null() {
-            return "1970-01-01".into();
-        }
-        format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday)
-    }
+    crate::platform::today()
 }
 
 /// Where a new post with this title goes: `_drafts/<slug>.md` or `_posts/<today>-<slug>.md`.
@@ -730,6 +722,8 @@ mod tests {
 
     /// The loop with stand-ins for `gh` and `sleep`: it waits for the build of HEAD, not an
     /// older one, and says how it ended; in a `&&` chain it only runs after the push worked.
+    // Runs a sh script; Windows gets these once the script is Rust.
+    #[cfg(unix)]
     #[test]
     fn follows_the_pages_build() {
         let dir = temp_dir("blog-pages");

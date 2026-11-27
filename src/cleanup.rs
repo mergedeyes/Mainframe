@@ -3,18 +3,14 @@
 
 use std::{
     collections::{BTreeMap, HashSet},
-    fs::{self, File},
-    os::{
-        fd::AsRawFd,
-        unix::fs::{FileExt, MetadataExt},
-    },
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
 
 use crate::{
     browser::human_size,
-    config, git, proc,
+    config, git, platform, proc,
     project::{self, Kind, Project, quote, quote_str, which},
     targets,
 };
@@ -143,11 +139,14 @@ pub fn measure(paths: &[PathBuf]) -> Usage {
 }
 
 /// Compressed extents sampled per measurement to estimate the ratio (each up to 128K).
+#[cfg(target_os = "linux")]
 const SAMPLES: usize = 32;
 /// btrfs compresses in chunks of this, each stored in whole sectors.
+#[cfg(target_os = "linux")]
 const SECTOR: u64 = 4096;
 
 #[derive(Default)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct Meter {
     seen: HashSet<(u64, u64)>,
     bytes: u64,
@@ -162,10 +161,11 @@ struct Meter {
 impl Meter {
     fn walk(&mut self, path: &Path, fiemap: bool) {
         let Ok(m) = fs::symlink_metadata(path) else { return };
-        if !m.is_dir() && m.nlink() > 1 && !self.seen.insert((m.dev(), m.ino())) {
+        let used = platform::disk_use(path, &m);
+        if used.id.is_some_and(|id| !self.seen.insert(id)) {
             return;
         }
-        self.bytes += m.blocks() * 512;
+        self.bytes += used.bytes;
         if m.is_dir() {
             if let Ok(rd) = fs::read_dir(path) {
                 for e in rd.flatten() {
@@ -173,10 +173,24 @@ impl Meter {
                 }
             }
         } else if fiemap && m.is_file() && m.len() > 0 {
+            #[cfg(target_os = "linux")]
             self.extents(path, m.len());
         }
     }
 
+    fn usage(self) -> Usage {
+        #[cfg(target_os = "linux")]
+        if self.encoded > 0 {
+            return self.compressed_usage();
+        }
+        Usage { bytes: self.bytes, disk: None }
+    }
+}
+
+/// Compressed btrfs: the kernel says which extents are stored compressed but not how
+/// small, so a sample of them is compressed again to estimate it.
+#[cfg(target_os = "linux")]
+impl Meter {
     /// Asks the kernel which parts of the file are stored compressed (FIEMAP works without
     /// root; their size on disk isn't part of the answer, hence the sampling).
     fn extents(&mut self, path: &Path, len: u64) {
@@ -185,7 +199,8 @@ impl Meter {
         const ENCODED: u32 = 0x8;
         const INLINE: u32 = 0x200;
         const COUNT: usize = 128;
-        let Ok(f) = File::open(path) else { return };
+        use std::os::fd::AsRawFd;
+        let Ok(f) = fs::File::open(path) else { return };
         let mut start = 0u64;
         while start < len {
             // struct fiemap (32 bytes) + COUNT struct fiemap_extent (56 bytes each).
@@ -237,10 +252,11 @@ impl Meter {
 
     /// Compresses the samples the way btrfs does (zstd level 3, the default, per chunk,
     /// rounded to sectors) and applies that ratio to everything stored compressed.
-    fn usage(self) -> Usage {
+    fn compressed_usage(self) -> Usage {
+        use std::os::unix::fs::FileExt;
         let (mut raw, mut packed) = (0u64, 0u64);
         for (path, offset, length) in &self.samples {
-            let Ok(f) = File::open(path) else { continue };
+            let Ok(f) = fs::File::open(path) else { continue };
             let mut data = vec![0u8; *length as usize];
             let Ok(n) = f.read_at(&mut data, *offset) else { continue };
             if n == 0 {
@@ -261,6 +277,12 @@ impl Meter {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn is_btrfs(_path: &Path) -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
 fn is_btrfs(path: &Path) -> bool {
     const BTRFS_SUPER_MAGIC: i64 = 0x9123_683E;
     let Ok(c) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else { return false };
@@ -774,6 +796,8 @@ mod usage_tests {
         assert_eq!(total(&[&release]), Usage { bytes: 50, disk: None });
     }
 
+    // Runs a sh script; Windows gets these once the script is Rust.
+    #[cfg(unix)]
     #[test]
     fn script_succeeds_and_reports_what_was_freed() {
         let dir = crate::testutil::temp_dir("script");
@@ -802,7 +826,7 @@ mod usage_tests {
         let text: String = (0..200_000).map(|i| format!("line {i} of very compressible build output\n")).collect();
         let f = dir.join("a.txt");
         fs::write(&f, &text).unwrap();
-        File::open(&f).unwrap().sync_all().unwrap();
+        fs::File::open(&f).unwrap().sync_all().unwrap();
         let u = measure(std::slice::from_ref(&dir));
         fs::remove_dir_all(&dir).unwrap();
         if let Some(disk) = u.disk {

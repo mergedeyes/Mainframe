@@ -606,10 +606,13 @@ mod branch_name_tests {
 
 #[cfg(test)]
 mod push_tests {
+    #![cfg_attr(windows, allow(unused_imports))]
     use super::*;
     use crate::testutil::{git as test_git, temp_dir};
 
     /// Pushing another branch leaves the checkout alone and lands on the remote.
+    // Runs a sh script; Windows gets these once the script is Rust.
+    #[cfg(unix)]
     #[test]
     fn pushes_a_branch_that_is_not_checked_out() {
         let base = temp_dir("push");
@@ -746,6 +749,8 @@ mod branch_tests {
 
     /// With pruning on, a merged branch whose remote branch is gone is deleted; one that
     /// isn't merged is kept, and so is everything with pruning off.
+    // Runs a sh script; Windows gets these once the script is Rust.
+    #[cfg(unix)]
     #[test]
     fn prunes_only_merged_branches_whose_remote_is_gone() {
         let (base, repo) = setup("prune");

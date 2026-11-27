@@ -1,11 +1,13 @@
 use std::{
     collections::HashMap,
-    env, fs,
+    fs,
     path::{Path, PathBuf},
 };
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::Deserialize;
+
+use crate::platform;
 
 pub const TEMPLATE: &str = r#"# Mainframe config
 #
@@ -165,8 +167,7 @@ pub fn key_matches(spec: &str, key: &KeyEvent) -> bool {
 
 impl Config {
     pub fn path() -> PathBuf {
-        let base = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".config"));
-        base.join("mainframe").join("config.toml")
+        platform::config_dir().join("config.toml")
     }
 
     /// Returns the config plus an error message if the file exists but is broken.
@@ -270,33 +271,41 @@ impl Config {
     }
 }
 
-pub fn home() -> PathBuf {
-    env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into())
-}
-
-/// `$XDG_STATE_HOME/mainframe`: history and saved output.
-pub fn state_dir() -> PathBuf {
-    env::var_os("XDG_STATE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/state")).join("mainframe")
-}
-
-/// `$XDG_CACHE_HOME/mainframe`: things that can be thrown away, like deploy build checkouts.
-pub fn cache_dir() -> PathBuf {
-    env::var_os("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".cache")).join("mainframe")
-}
+pub use crate::platform::{cache_dir, home, state_dir};
 
 /// A file name for things kept per project, e.g. `~/Projekte/Games/bash_emu` →
-/// `Projekte%2FGames%2Fbash_emu`: readable, and no two folders share one.
+/// `Projekte%2FGames%2Fbash_emu`: readable, and no two folders share one. On Windows
+/// `\` is a separator too (also written `%2F`), and `D:` outside the profile becomes `D%3A`.
 pub fn path_key(root: &Path) -> String {
     let home = home();
     let rel = root.strip_prefix(&home).map_or_else(|_| root.to_string_lossy(), |r| r.to_string_lossy());
-    let rel = rel.trim_matches('/');
-    if rel.is_empty() { "~".to_string() } else { rel.replace('%', "%25").replace('/', "%2F") }
+    let rel = rel.trim_matches(is_separator);
+    if rel.is_empty() {
+        return "~".to_string();
+    }
+    let mut key = String::with_capacity(rel.len());
+    for c in rel.chars() {
+        match c {
+            '%' => key.push_str("%25"),
+            c if is_separator(c) => key.push_str("%2F"),
+            // Not allowed in Windows file names.
+            ':' | '<' | '>' | '"' | '|' | '?' | '*' if cfg!(windows) => key.push_str(&format!("%{:02X}", c as u32)),
+            c => key.push(c),
+        }
+    }
+    key
+}
+
+fn is_separator(c: char) -> bool {
+    c == '/' || (cfg!(windows) && c == '\\')
 }
 
 pub fn expand_tilde(s: &str) -> PathBuf {
     match s.strip_prefix('~') {
-        Some(rest) => home().join(rest.trim_start_matches('/')),
-        None => PathBuf::from(s),
+        Some(rest) if rest.is_empty() || rest.starts_with(is_separator) => {
+            home().join(rest.trim_start_matches(is_separator))
+        }
+        _ => PathBuf::from(s),
     }
 }
 
@@ -310,7 +319,7 @@ pub fn pretty_path(p: &Path) -> String {
     let home = home();
     match p.strip_prefix(&home) {
         Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
-        Ok(rest) => format!("~/{}", rest.display()),
+        Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
         Err(_) => p.display().to_string(),
     }
 }
@@ -364,6 +373,16 @@ mod tests {
     use super::*;
 
     /// Every setting in the template is one Mainframe moves back to the top, and the other way round.
+    #[cfg(windows)]
+    #[test]
+    fn path_keys_are_valid_windows_file_names() {
+        let h = home();
+        assert_eq!(path_key(&h.join(r"Projekte\Mainframe")), "Projekte%2FMainframe");
+        assert_eq!(path_key(Path::new(r"D:\code\app")), "D%3A%2Fcode%2Fapp");
+        assert_eq!(path_key(&h), "~");
+        assert_eq!(expand_tilde(r"~\bin"), h.join("bin"));
+    }
+
     #[test]
     fn top_level_matches_the_template() {
         let t: toml::Table = TEMPLATE.parse().unwrap();

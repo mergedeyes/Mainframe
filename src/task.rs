@@ -2,9 +2,8 @@
 
 use std::{
     io::{BufRead, BufReader, Read},
-    os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Child, ExitStatus, Stdio},
     sync::mpsc::{self, Receiver, TryRecvError},
     thread,
     time::{Duration, Instant},
@@ -15,6 +14,7 @@ use ratatui::text::Line;
 use crate::{
     ansi,
     locate::{self, Loc},
+    platform::{self, ProcessTree},
 };
 
 const MAX_LINES: usize = 20_000;
@@ -22,6 +22,7 @@ const MAX_LINES: usize = 20_000;
 pub struct Task {
     pub label: String,
     child: Child,
+    tree: ProcessTree,
     rx: Receiver<String>,
     pub started: Instant,
     readers_done: bool,
@@ -29,10 +30,8 @@ pub struct Task {
 
 impl Task {
     pub fn spawn(label: String, cmd: &str, cwd: &Path) -> std::io::Result<Self> {
-        let mut command = Command::new("sh");
+        let mut command = platform::shell(cmd);
         command
-            .arg("-c")
-            .arg(cmd)
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -42,16 +41,12 @@ impl Task {
             .env("CLICOLOR_FORCE", "1")
             .env("FORCE_COLOR", "1")
             .env("GIT_TERMINAL_PROMPT", "0");
-        // New session: no controlling terminal, so anything that wants a password
-        // (sudo, ssh) fails fast instead of fighting the TUI for the tty, and the
-        // process group lets `kill` take grandchildren (e.g. the binary under `cargo run`) too.
-        unsafe {
-            command.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
+        // Away from the terminal (password prompts fail fast instead of fighting the TUI
+        // for it), and grouped so stopping it takes grandchildren like the binary under
+        // `cargo run` along.
+        ProcessTree::prepare(&mut command);
         let mut child = command.spawn()?;
+        let tree = ProcessTree::attach(&child);
 
         let (tx, rx) = mpsc::channel();
         let out = child.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send>);
@@ -68,7 +63,7 @@ impl Task {
             });
         }
 
-        Ok(Self { label, child, rx, started: Instant::now(), readers_done: false })
+        Ok(Self { label, child, tree, rx, started: Instant::now(), readers_done: false })
     }
 
     /// Moves new output into `out` and reports completion once the process has
@@ -93,18 +88,13 @@ impl Task {
         }
     }
 
-    /// Asks the task's whole process group to stop, without waiting for it.
+    /// Asks the task and everything it started to stop, without waiting for it.
     pub fn signal(&self) {
-        unsafe {
-            libc::killpg(self.child.id() as libc::pid_t, libc::SIGTERM);
-        }
+        self.tree.terminate();
     }
 
     pub fn kill(&mut self) {
-        let pid = self.child.id() as libc::pid_t;
-        unsafe {
-            libc::killpg(pid, libc::SIGTERM);
-        }
+        self.tree.terminate();
         let _ = self.child.kill();
     }
 }

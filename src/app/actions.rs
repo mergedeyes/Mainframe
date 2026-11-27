@@ -1,8 +1,7 @@
 //! Opening, editing and running things, in the background or in the full terminal.
 
 use std::{
-    env, fs,
-    os::unix::process::CommandExt,
+    fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -12,7 +11,7 @@ use super::{App, Foreground, Level};
 use crate::{
     browser,
     config::{self, Action, Config},
-    locate, proc,
+    locate, platform, proc,
     project::{self, Op, Plan, quote, quote_str},
 };
 
@@ -33,10 +32,9 @@ impl App {
             self.edit_selected();
         } else if e.is_exec {
             self.run_op(Op::Run, false);
-        } else if project::which("xdg-open").is_some() {
-            self.spawn_detached(&format!("xdg-open {}", quote(&e.path)));
-        } else {
-            self.set_status("binary file", Level::Info);
+        } else if let Err(e) = platform::open(&e.path) {
+            let msg = if e.kind() == std::io::ErrorKind::NotFound { "binary file".into() } else { e.to_string() };
+            self.set_status(msg, Level::Info);
         }
     }
 
@@ -113,8 +111,7 @@ impl App {
     }
 
     pub(super) fn open_shell(&mut self) {
-        let shell = env::var("SHELL").unwrap_or_else(|_| "sh".into());
-        self.in_terminal(quote_str(&shell));
+        self.in_terminal(platform::interactive_shell());
     }
 
     pub(super) fn run_op(&mut self, op: Op, interactive: bool) {
@@ -151,15 +148,10 @@ impl App {
     }
 
     pub(super) fn spawn_detached(&mut self, cmd: &str) {
-        let spawned = Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(&self.browser.cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn();
+        let mut command = platform::shell(cmd);
+        command.current_dir(&self.browser.cwd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        platform::detach(&mut command);
+        let spawned = command.spawn();
         match spawned {
             // Reap it in the background so it doesn't linger as a zombie.
             Ok(mut child) => drop(thread::spawn(move || child.wait())),
