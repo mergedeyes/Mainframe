@@ -24,12 +24,12 @@ explained.
 
 | Option | Default | What it does |
 |---|---|---|
-| `editor` | `"nano"` | the editor for `e` and `Enter`; anything that waits until you close it, like `"vim"` or `"micro"`. A program with spaces in its path goes in quotes: `'"C:\Program Files\Notepad++\notepad++.exe" -multiInst'` |
+| `editor` | `""` | the editor for `e` and `Enter`; anything that waits until you close it, like `"vim"` or `"micro"`. Empty uses `$VISUAL` or `$EDITOR`, else nano (on Windows `edit`, else Notepad). A program with spaces in its path goes in quotes: `'"C:\Program Files\Notepad++\notepad++.exe" -multiInst'` |
 | `vscode` | `"code"` | the command for `o` and `O` |
 | `shell` | `""` | the shell for commands you write: `:`, `[runners]` and `[[actions]]`. A name on your PATH or a full path, like `"bash"`, `"fish"`, `"pwsh"` or `"cmd"`; empty is `sh`, or PowerShell on Windows. See [Which shell runs what](#which-shell-runs-what) |
 | `vs_env` | `true` | Windows: commands run with Visual Studio's C++ build environment (`cl`, `link`, `INCLUDE`, `LIB`), as in a Developer PowerShell, when Visual Studio is installed and `cl` isn't on your PATH already; `false` leaves the environment as Mainframe found it |
 | `install_dir` | `"~/.local/bin"` | where `i` installs programs |
-| `projects_dir` | `""` | the projects folder for `J`; empty uses the first that exists of `~/Projekte`, `~/Projects`, `~/projects`, `~/Code`, `~/code`, `~/dev`, `~/src`, `~/repos` |
+| `projects_dir` | `""` | the projects folder for `J`; empty uses the first that exists of `~/Projekte`, `~/Projects`, `~/projects`, `~/Code`, `~/code`, `~/dev`, `~/src`, `~/repos`, `~/source/repos` (Visual Studio's) |
 | `show_hidden` | `true` | show hidden files at start (`.` toggles) |
 | `preview` | `true` | show the preview at start (`v` toggles) |
 | `zoxide` | `true` | use [zoxide](https://github.com/ajeetdsouza/zoxide) when it's installed: keywords in `c`, the `Z` picker, and folders you visit are added to its list |

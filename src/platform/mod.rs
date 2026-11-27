@@ -7,14 +7,20 @@ mod unix;
 #[cfg(unix)]
 use unix as sys;
 #[cfg(unix)]
-pub use unix::{ProcessTree, detach, dev_env, msvc_available, open, today, trash, trash_available, writable};
+pub use unix::{
+    ProcessTree, add_to_user_path, detach, dev_env, msvc_available, on_user_path, open, today, trash, trash_available,
+    writable,
+};
 
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
 use windows as sys;
 #[cfg(windows)]
-pub use windows::{ProcessTree, detach, dev_env, msvc_available, open, today, trash, trash_available, writable};
+pub use windows::{
+    ProcessTree, add_to_user_path, detach, dev_env, msvc_available, on_user_path, open, today, trash, trash_available,
+    writable,
+};
 
 use std::{
     env,

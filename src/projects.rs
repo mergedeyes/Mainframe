@@ -15,7 +15,9 @@ use crate::{
 };
 
 /// Tried in order when `projects_dir` isn't set.
-const CANDIDATES: &[&str] = &["Projekte", "Projects", "projects", "Code", "code", "dev", "src", "repos"];
+/// `source/repos` is where Visual Studio puts them on Windows.
+const CANDIDATES: &[&str] =
+    &["Projekte", "Projects", "projects", "Code", "code", "dev", "src", "repos", "source/repos"];
 /// `Games/bash_emu` is still found, `Games/2d/bash_emu` too; deeper is a project's own layout.
 const MAX_DEPTH: usize = 3;
 /// Files that don't stop a folder from being a group of projects.

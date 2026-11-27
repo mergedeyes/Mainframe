@@ -45,6 +45,10 @@ impl DesktopPlan {
 /// Plans for the project's desktop entries that launch `bin` (or, with `None`,
 /// every entry, each targeting the binary its own `Exec=` names).
 pub fn plans(root: &Path, bin: Option<&str>, install_dir: &Path) -> Vec<DesktopPlan> {
+    // Desktop entries are a Linux (freedesktop) thing; Windows has no use for them.
+    if cfg!(windows) {
+        return Vec::new();
+    }
     let mut files = Vec::new();
     find_desktop_files(root, 0, &mut files);
     files

@@ -171,7 +171,7 @@ const PS_PRELUDE: &str = "$ProgressPreference = 'SilentlyContinue'\n\
 const PS_EPILOGUE: &str = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE } else { exit 1 } }";
 
 /// Base64 of the UTF-16LE text, as `-EncodedCommand` wants it.
-fn encode_command(script: &str) -> String {
+pub fn encode_command(script: &str) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);

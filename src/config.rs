@@ -20,7 +20,8 @@ pub const TEMPLATE: &str = r#"# Mainframe config
 #   {root}  detected project root (falls back to {dir})
 
 # Command used for `e` / Enter. Anything that blocks until you close it works.
-editor = "nano"
+# Empty: $VISUAL or $EDITOR, else nano (on Windows: edit, else Notepad).
+editor = ""
 
 # Command used for `o` (file) and `O` (folder).
 vscode = "code"
@@ -39,7 +40,7 @@ vs_env = true
 install_dir = "~/.local/bin"
 
 # The folder `J` lists projects from. Empty: the first of ~/Projekte, ~/Projects,
-# ~/projects, ~/Code, ~/code, ~/dev, ~/src, ~/repos that exists.
+# ~/projects, ~/Code, ~/code, ~/dev, ~/src, ~/repos, ~/source/repos that exists.
 projects_dir = ""
 
 show_hidden = true
@@ -127,7 +128,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            editor: "nano".into(),
+            editor: String::new(),
             vscode: "code".into(),
             shell: String::new(),
             vs_env: true,
@@ -282,6 +283,24 @@ fn key_lines(text: &str, key: &str) -> Vec<usize> {
 }
 
 impl Config {
+    /// The editor to use: the setting, else $VISUAL or $EDITOR, else the system's usual one.
+    pub fn editor(&self) -> String {
+        let set = |s: String| Some(s).filter(|s| !s.trim().is_empty());
+        set(self.editor.clone())
+            .or_else(|| std::env::var("VISUAL").ok().and_then(set))
+            .or_else(|| std::env::var("EDITOR").ok().and_then(set))
+            .unwrap_or_else(|| {
+                if !cfg!(windows) {
+                    "nano".into()
+                } else if platform::which("edit").is_some() {
+                    // Microsoft Edit, a terminal editor that comes with Windows 11.
+                    "edit".into()
+                } else {
+                    "notepad".into()
+                }
+            })
+    }
+
     /// How commands run: the shell, and Visual Studio's environment on Windows.
     pub fn setup(&self) -> crate::run::Setup {
         crate::run::Setup { shell: self.shell(), dev_env: self.vs_env }

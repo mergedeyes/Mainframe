@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Linux-blue" alt="Platform: Linux">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue" alt="Platform: Linux | Windows">
   <img src="https://img.shields.io/badge/status-early%20development-orange" alt="Status: early development">
 </p>
 

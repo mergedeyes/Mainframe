@@ -180,6 +180,15 @@ pub(super) fn decode_legacy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+pub fn on_user_path(_dir: &Path) -> bool {
+    false
+}
+
+/// On Unix the PATH comes from shell profiles, which Mainframe doesn't edit.
+pub fn add_to_user_path(_dir: &Path) -> io::Result<()> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "add it in your shell's profile"))
+}
+
 pub(super) fn free_space(path: &Path) -> Option<u64> {
     let c = CString::new(path.as_os_str().as_bytes()).ok()?;
     // SAFETY: c is a valid C string and st a statvfs to fill.

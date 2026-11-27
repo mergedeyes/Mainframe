@@ -63,7 +63,7 @@ impl App {
                 return false;
             }
         }
-        let Some(editor) = Step::from_setting(&self.config.editor) else {
+        let Some(editor) = Step::from_setting(&self.config.editor()) else {
             self.set_status("no editor set — editor = … in the config", Level::Err);
             return false;
         };
@@ -89,7 +89,7 @@ impl App {
             self.spawn_detached(locate::editor_cmd(&self.config.vscode, &loc));
             self.set_status(format!("opened {}:{} in VS Code", config::pretty_path(&loc.path), loc.line), Level::Ok);
         } else {
-            self.in_terminal(locate::editor_cmd(&self.config.editor, &loc).into());
+            self.in_terminal(locate::editor_cmd(&self.config.editor(), &loc).into());
         }
         true
     }
