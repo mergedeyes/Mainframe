@@ -202,7 +202,7 @@ pub(super) fn draw_blog_picker(f: &mut Frame, picker: &mut BlogPicker, area: Rec
     let keys = if picker.filtering {
         " type to filter · Enter keep · Esc clear "
     } else {
-        " ⏎ edit · a new · p publish · P push · u unpublish · d trash · / filter · Esc close "
+        " ⏎ write · E own editor · a new · p publish · P push · u unpublish · d trash · / filter · Esc close "
     };
     let inner = popup_pane(f, rect, title, keys);
     let [input, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);

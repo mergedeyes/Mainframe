@@ -10,6 +10,7 @@ mod files;
 mod git_menu;
 mod installer;
 mod notes_view;
+mod post_editor;
 mod project_picker;
 mod prompt;
 mod task_picker;
@@ -33,6 +34,7 @@ pub use deploy::{DeployPicker, deploy_from_form};
 pub use file_finder::FileFinder;
 pub use installer::{AfterReview, DesktopReview, InstallPicker};
 pub use notes_view::NotesView;
+pub use post_editor::{Ask, Part, PostEditor};
 pub use project_picker::ProjectPicker;
 pub use task_picker::TaskPicker;
 pub use tasks::Tab;
@@ -87,6 +89,7 @@ pub enum Mode {
     Deploy(DeployPicker),
     Cleanup(CleanupPicker),
     Blog(BlogPicker),
+    Post(Box<PostEditor>),
 }
 
 #[derive(Clone)]
@@ -302,6 +305,7 @@ impl App {
         self.poll_watchers();
         self.poll_git();
         self.poll_cleanup();
+        self.poll_post_editor();
         self.poll_dir();
         if self.repo_watch.as_ref().is_some_and(|(_, w)| w.changed()) {
             self.request_git();
@@ -469,12 +473,29 @@ impl App {
             Mode::Deploy(_) => self.key_deploy(key),
             Mode::Cleanup(_) => self.key_cleanup(key),
             Mode::Blog(_) => self.key_blog_picker(key),
+            Mode::Post(_) => self.key_post_editor(key),
             Mode::Normal => self.key_normal(key),
         }
         if !self.show_output {
             self.focus = Focus::Browser;
         }
         self.refresh();
+    }
+
+    /// Pasted text (bracketed paste). The post editor takes it whole; everything else gets
+    /// it as typed keys, as it did before paste was bracketed.
+    pub fn on_paste(&mut self, text: &str) {
+        if let Mode::Post(ed) = &mut self.mode {
+            return ed.paste(text);
+        }
+        for c in text.replace("\r\n", "\n").chars() {
+            let code = match c {
+                '\n' | '\r' => KeyCode::Enter,
+                '\t' => KeyCode::Tab,
+                c => KeyCode::Char(c),
+            };
+            self.on_key(KeyEvent::from(code));
+        }
     }
 
     fn key_normal(&mut self, key: KeyEvent) {

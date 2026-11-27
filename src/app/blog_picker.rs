@@ -1,10 +1,11 @@
-//! `L` in the blog repo: its drafts and posts. New posts, editing, publishing and pushing.
+//! `L` in the blog repo: its drafts and posts. New posts, editing (in `post_editor`, or the
+//! configured editor), publishing and pushing.
 
 use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{App, Confirmed, Level, Mode, files::trash_cmd};
+use super::{App, Confirmed, Level, Mode, files::trash_cmd, post_editor::Part};
 use crate::{
     blog::{self, Change, Post, State},
     filter_list::{self, FilterList, Match},
@@ -66,7 +67,8 @@ impl App {
             KeyCode::Home | KeyCode::Char('g') => filter_list::step(state, len, -(len as isize)),
             KeyCode::End | KeyCode::Char('G') => filter_list::step(state, len, len as isize),
             KeyCode::Char('a') => self.new_post_form(),
-            KeyCode::Enter | KeyCode::Char('e') => self.edit_post(),
+            KeyCode::Enter | KeyCode::Char('e') => self.edit_post(false),
+            KeyCode::Char('E') => self.edit_post(true),
             KeyCode::Char('p') => self.confirm_publish(),
             KeyCode::Char('P') => self.push_post(),
             KeyCode::Char('u') => self.unpublish_post(),
@@ -104,7 +106,7 @@ impl App {
         match blog::create(root, form.get("title"), form.get("description"), draft, &blog::today()) {
             Ok(path) => {
                 self.set_status(format!("wrote {}", blog::rel(root, &path)), Level::Ok);
-                self.edit_post_file(&path);
+                self.open_post_editor(root.clone(), &path, Some(Part::Body));
                 true
             }
             Err(e) => {
@@ -114,13 +116,17 @@ impl App {
         }
     }
 
-    fn edit_post(&mut self) {
-        if let Some((_, post)) = self.picked_post() {
+    /// The built-in editor on the selected post, or with `external` the configured one.
+    fn edit_post(&mut self, external: bool) {
+        let Some((root, post)) = self.picked_post() else { return };
+        if external {
             self.edit_post_file(&post.path);
+        } else {
+            self.open_post_editor(root, &post.path, None);
         }
     }
 
-    /// The editor on a post; the picker comes back afterwards.
+    /// The external editor on a post; the picker comes back afterwards.
     fn edit_post_file(&mut self, path: &Path) {
         self.mode = Mode::Normal;
         if self.edit_path(path, "") {
@@ -170,7 +176,7 @@ impl App {
     }
 
     /// Commits and pushes in the output pane, then follows the GitHub Pages build when it can.
-    fn commit_post(&mut self, root: PathBuf, path: &Path, msg: String) {
+    pub(super) fn commit_post(&mut self, root: PathBuf, path: &Path, msg: String) {
         let mut cmd = blog::commit_cmd(&root, &msg);
         if let Some(follow) = blog::follow_pages_cmd(&root, path) {
             cmd = format!("{cmd} && {follow}");
