@@ -375,6 +375,7 @@ fn builtin(b: &Builtin, ctx: &mut Ctx) -> Result<(), String> {
             }
             Ok(())
         }
+        Builtin::FollowPages { repo, live } => crate::blog::follow_pages(ctx, repo, live),
         Builtin::WatchRelease { repo, workflow, tag } => {
             crate::release::watch_release(ctx, repo.as_deref(), workflow, tag)
         }

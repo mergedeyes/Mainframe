@@ -114,6 +114,18 @@ pub fn detach(command: &mut Command) {
     command.process_group(0);
 }
 
+pub(super) fn notify(summary: &str, body: &str) {
+    if which("notify-send").is_none() {
+        return;
+    }
+    let mut c = Command::new("notify-send");
+    c.args(["-a", "Mainframe", summary, body]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    detach(&mut c);
+    if let Ok(mut child) = c.spawn() {
+        drop(thread::spawn(move || child.wait()));
+    }
+}
+
 /// Opens a file in its default application.
 pub fn open(path: &Path) -> io::Result<()> {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };

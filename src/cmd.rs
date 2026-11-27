@@ -72,6 +72,8 @@ pub enum Builtin {
     DeleteBranch { remote: String, branch: String },
     /// Follows the CI run a pushed release tag started, then shows the release.
     WatchRelease { repo: Option<String>, workflow: String, tag: String },
+    /// Waits for the GitHub Pages build of HEAD, then says `live`.
+    FollowPages { repo: String, live: String },
 }
 
 impl Builtin {
@@ -88,6 +90,7 @@ impl Builtin {
             Builtin::RequireVersion { file, version, .. } => format!("check that {file} is at {version}"),
             Builtin::DeleteBranch { remote, branch } => format!("delete {branch} (also on {remote})"),
             Builtin::WatchRelease { workflow, tag, .. } => format!("follow the {workflow} run of {tag}"),
+            Builtin::FollowPages { .. } => "wait for the GitHub Pages build".into(),
         }
     }
 }

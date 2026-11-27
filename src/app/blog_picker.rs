@@ -215,10 +215,10 @@ impl App {
     pub(super) fn commit_post(&mut self, root: PathBuf, path: &Path, msg: String) {
         let now = blog::post(path).is_some_and(|p| p.state == State::Now);
         let mut cmd = if now { blog::commit_now_cmd(&msg) } else { blog::commit_cmd(&root, &msg) };
-        if let Some(follow) = blog::follow_pages_cmd(&root, path) {
-            cmd = format!("{cmd} && {follow}");
+        if let (Some(follow), crate::cmd::Cmd::Steps(steps)) = (blog::follow_pages_cmd(&root, path), &mut cmd) {
+            steps.push(follow.into());
         }
-        self.start_task(msg, Plan { cmd: crate::cmd::Cmd::Sh(cmd), cwd: root });
+        self.start_task(msg, Plan { cmd, cwd: root });
     }
 
     fn unpublish_post(&mut self) {

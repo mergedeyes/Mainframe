@@ -89,6 +89,11 @@ fn simplify(p: PathBuf) -> PathBuf {
     if ok { PathBuf::from(plain) } else { p }
 }
 
+/// A desktop notification, when the system has a way to show one. Best effort.
+pub fn notify(summary: &str, body: &str) {
+    sys::notify(summary, body);
+}
+
 /// Finds a program on PATH. On Windows `cargo` finds `cargo.exe`, `code` finds `code.cmd`.
 pub fn which(name: &str) -> Option<PathBuf> {
     env::split_paths(&env::var_os("PATH")?).find_map(|dir| sys::program_in(&dir, name))

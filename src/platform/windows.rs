@@ -190,6 +190,10 @@ pub fn open(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Toast notifications need an app identity Mainframe doesn't register yet; the terminal
+/// bell still rings.
+pub(super) fn notify(_summary: &str, _body: &str) {}
+
 /// The Recycle Bin is always there.
 pub fn trash_available() -> bool {
     true
