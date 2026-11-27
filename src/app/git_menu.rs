@@ -136,7 +136,7 @@ impl App {
             }
             'e' => {
                 // git runs it through its own sh, so it's the setting as written.
-                let cmd = Step::words("git commit --amend").env("GIT_EDITOR", &self.config.editor);
+                let cmd = Step::words("git commit --amend").env("GIT_EDITOR", self.config.editor());
                 return self.foreground(Plan { cmd: cmd.into(), cwd }, true);
             }
             'x' => {

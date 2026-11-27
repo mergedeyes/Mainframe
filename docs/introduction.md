@@ -75,7 +75,8 @@ targets, just recipes, every cargo binary and example, and more. See
 ## Your projects folder
 
 `J` lists the projects in your projects folder: `~/Projekte`, `~/Projects`,
-`~/projects`, `~/Code`, `~/code`, `~/dev`, `~/src` or `~/repos`, whichever
+`~/projects`, `~/Code`, `~/code`, `~/dev`, `~/src`, `~/repos` or
+`~/source/repos` (where Visual Studio puts them), whichever
 exists first, or the folder you set as `projects_dir` in the
 [configuration](reference/config.md). Group folders like `Games/` are opened
 up into the projects inside them.
@@ -89,14 +90,14 @@ the output it had when you left. See
 
 Nothing is written into your projects unless you ask for it.
 
-| What | Where |
-|---|---|
-| Configuration | `~/.config/mainframe/config.toml` |
-| Per-project settings (deploy targets, actions) | `~/.config/mainframe/projects/` |
-| Your CLAUDE.md template | `~/.config/mainframe/CLAUDE.md` |
-| Notes and todos | `~/.local/share/mainframe/notes/` |
-| Saved output, command history | `~/.local/state/mainframe/` |
-| Deploy build checkouts | `~/.cache/mainframe/deploy/` |
+| What | Linux | Windows |
+|---|---|---|
+| Configuration | `~/.config/mainframe/config.toml` | `%APPDATA%\mainframe\config.toml` |
+| Per-project settings (deploy targets, actions) | `~/.config/mainframe/projects/` | `%APPDATA%\mainframe\projects\` |
+| Your CLAUDE.md template | `~/.config/mainframe/CLAUDE.md` | `%APPDATA%\mainframe\CLAUDE.md` |
+| Notes and todos | `~/.local/share/mainframe/notes/` | `%APPDATA%\mainframe\notes\` |
+| Saved output, command history | `~/.local/state/mainframe/` | `%LOCALAPPDATA%\mainframe\state\` |
+| Deploy build checkouts | `~/.cache/mainframe/deploy/` | `%LOCALAPPDATA%\mainframe\cache\deploy\` |
 
 The `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME`
-variables move these the usual way.
+variables move these the usual way, on Windows too.

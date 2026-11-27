@@ -314,9 +314,21 @@ pub fn install_file(ctx: &mut crate::run::Ctx, src: &Path, dest: &Path) -> Resul
         return Err(format!("can't install {pretty}: {e}"));
     }
     ctx.success(format!("installed → {pretty}"));
-    let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d == dir));
+    let shown = crate::config::pretty_path(dir);
+    let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d == dir))
+        || crate::platform::on_user_path(dir);
     if !on_path {
-        ctx.say(format!("note: {} is not on your PATH", crate::config::pretty_path(dir)));
+        // Windows installers put their folder on the user PATH; on Unix that's the shell profile's job.
+        // Tests don't touch the machine's PATH.
+        let added = if cfg!(test) {
+            Err(std::io::ErrorKind::Unsupported.into())
+        } else {
+            crate::platform::add_to_user_path(dir)
+        };
+        match added {
+            Ok(()) => ctx.say(format!("added {shown} to your PATH — terminals opened from now on find it")),
+            Err(_) => ctx.say(format!("note: {shown} is not on your PATH")),
+        }
     }
     Ok(())
 }

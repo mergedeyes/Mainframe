@@ -21,7 +21,12 @@ use windows_sys::Win32::{
         GetDiskFreeSpaceExW, GetFileInformationByHandle, GetFileInformationByHandleEx,
     },
     System::{
+        Environment::ExpandEnvironmentStringsW,
         JobObjects::{AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject},
+        Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_EXPAND_SZ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
+            RegSetValueExW,
+        },
         SystemInformation::GetLocalTime,
         Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW},
     },
@@ -30,7 +35,7 @@ use windows_sys::Win32::{
             FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, SHFILEOPSTRUCTW, SHFileOperationW,
             ShellExecuteW,
         },
-        WindowsAndMessaging::SW_SHOWNORMAL,
+        WindowsAndMessaging::{HWND_BROADCAST, SMTO_ABORTIFHUNG, SW_SHOWNORMAL, SendMessageTimeoutW, WM_SETTINGCHANGE},
     },
 };
 
@@ -191,9 +196,121 @@ pub fn open(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Toast notifications need an app identity Mainframe doesn't register yet; the terminal
-/// bell still rings.
-pub(super) fn notify(_summary: &str, _body: &str) {}
+/// A toast, through Windows PowerShell's WinRT access and its app identity (a console
+/// program has none of its own). Without a desktop, as over ssh, nothing shows.
+pub(super) fn notify(summary: &str, body: &str) {
+    let xml = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\'', "&apos;");
+    let script = format!(
+        "$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]\n\
+         $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]\n\
+         $x = New-Object Windows.Data.Xml.Dom.XmlDocument\n\
+         $x.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>')\n\
+         $id = '{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\powershell.exe'\n\
+         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show([Windows.UI.Notifications.ToastNotification]::new($x))",
+        xml(summary).replace('\'', "''"),
+        xml(body).replace('\'', "''"),
+    );
+    let mut c = Command::new("powershell.exe");
+    c.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand"])
+        .arg(crate::shell::encode_command(&script))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    detach(&mut c);
+    if let Ok(mut child) = c.spawn() {
+        drop(std::thread::spawn(move || child.wait()));
+    }
+}
+
+/// The user's own PATH (HKCU\Environment), as stored: `%VARS%` not expanded yet.
+fn user_path() -> Option<String> {
+    let key = wide(OsStr::new("Environment"));
+    let name = wide(OsStr::new("Path"));
+    // SAFETY: the key is closed before returning; buffers are sized as the API reported.
+    unsafe {
+        let mut hkey: HKEY = ptr::null_mut();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_READ, &mut hkey) != 0 {
+            return None;
+        }
+        let mut size = 0u32;
+        let mut kind = 0u32;
+        let mut value = None;
+        if RegQueryValueExW(hkey, name.as_ptr(), ptr::null(), &mut kind, ptr::null_mut(), &mut size) == 0 {
+            let mut buf = vec![0u16; (size as usize).div_ceil(2)];
+            if RegQueryValueExW(hkey, name.as_ptr(), ptr::null(), &mut kind, buf.as_mut_ptr().cast(), &mut size) == 0 {
+                let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                value = Some(String::from_utf16_lossy(&buf[..len]));
+            }
+        }
+        RegCloseKey(hkey);
+        value.or(Some(String::new()))
+    }
+}
+
+fn expand(s: &str) -> String {
+    let src = wide(OsStr::new(s));
+    // SAFETY: the first call measures, the second writes at most that many u16s.
+    unsafe {
+        let n = ExpandEnvironmentStringsW(src.as_ptr(), ptr::null_mut(), 0);
+        let mut buf = vec![0u16; n as usize];
+        let n = ExpandEnvironmentStringsW(src.as_ptr(), buf.as_mut_ptr(), n);
+        if n == 0 {
+            return s.to_string();
+        }
+        String::from_utf16_lossy(&buf[..(n as usize).saturating_sub(1)])
+    }
+}
+
+fn same_dir(a: &str, dir: &Path) -> bool {
+    let norm = |s: &str| s.trim().trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase();
+    !a.trim().is_empty() && norm(&expand(a)) == norm(&dir.to_string_lossy())
+}
+
+/// Whether `dir` is on the user's PATH as stored, so also when this process started earlier.
+pub fn on_user_path(dir: &Path) -> bool {
+    user_path().is_some_and(|p| p.split(';').any(|e| same_dir(e, dir)))
+}
+
+/// Appends `dir` to the user's PATH and tells running programs; terminals opened from
+/// now on find what's in it.
+pub fn add_to_user_path(dir: &Path) -> io::Result<()> {
+    let current = user_path().ok_or_else(|| io::Error::other("can't read the user PATH"))?;
+    if current.split(';').any(|e| same_dir(e, dir)) {
+        return Ok(());
+    }
+    let new = if current.trim_end_matches(';').is_empty() {
+        dir.display().to_string()
+    } else {
+        format!("{};{}", current.trim_end_matches(';'), dir.display())
+    };
+    let key = wide(OsStr::new("Environment"));
+    let name = wide(OsStr::new("Path"));
+    let data = wide(OsStr::new(&new));
+    // SAFETY: the key is closed before returning; data is NUL-terminated UTF-16.
+    unsafe {
+        let mut hkey: HKEY = ptr::null_mut();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_READ | KEY_WRITE, &mut hkey) != 0 {
+            return Err(io::Error::other("can't open the user environment"));
+        }
+        let bytes = (data.len() * 2) as u32;
+        let set = RegSetValueExW(hkey, name.as_ptr(), 0, REG_EXPAND_SZ, data.as_ptr().cast(), bytes);
+        RegCloseKey(hkey);
+        if set != 0 {
+            return Err(io::Error::other(format!("can't write the user PATH (error {set})")));
+        }
+        let env = wide(OsStr::new("Environment"));
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            env.as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            2000,
+            ptr::null_mut(),
+        );
+    }
+    Ok(())
+}
 
 /// The Recycle Bin is always there.
 pub fn trash_available() -> bool {
@@ -347,6 +464,16 @@ pub(super) fn disk_use(path: &Path, meta: &Metadata) -> DiskUse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_entries_compare_expanded_and_case_blind() {
+        let profile = env::var("USERPROFILE").unwrap();
+        let bin = Path::new(&profile).join(".local").join("bin");
+        assert!(same_dir(r"%USERPROFILE%\.local\bin\", &bin));
+        assert!(same_dir(&bin.to_string_lossy().to_uppercase(), &bin));
+        assert!(!same_dir("", &bin));
+        assert!(!same_dir(r"%USERPROFILE%\.cargo\bin", &bin));
+    }
 
     #[test]
     fn oem_bytes_are_decoded() {
