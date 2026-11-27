@@ -47,11 +47,19 @@ pub struct Candidate {
     pub desktop: Vec<DesktopPlan>,
 }
 
+impl Candidate {
+    /// Built by cargo, in `target/`.
+    pub fn in_target(&self) -> bool {
+        Path::new(&self.rel).starts_with("target")
+    }
+}
+
 const MAX_DEPTH: usize = 7;
 const MAX_FILES: usize = 50_000;
 
 /// Directories never worth descending into.
-const SKIP: &[&str] = &["node_modules", "__pycache__", "venv", "dist-newstyle"];
+/// CMakeFiles holds the compiler checks' test programs, obj .NET's apphost copies.
+const SKIP: &[&str] = &["node_modules", "__pycache__", "venv", "dist-newstyle", "CMakeFiles", "obj"];
 /// Cargo internals inside `target/` (test binaries, build scripts, caches).
 const SKIP_IN_TARGET: &[&str] = &["deps", "build", "incremental", ".fingerprint", "doc", "tmp"];
 
@@ -67,7 +75,7 @@ pub fn scan(root: &Path, install_dir: &Path) -> Vec<Candidate> {
         .collect();
     // Cargo outputs first (release before debug), newest first within each group.
     out.sort_by(|a, b| {
-        let rank = |c: &Candidate| (!c.rel.starts_with("target/"), !c.kind.starts_with("release"));
+        let rank = |c: &Candidate| (!c.in_target(), !c.kind.starts_with("release"));
         rank(a).cmp(&rank(b)).then(b.modified.cmp(&a.modified))
     });
     out
@@ -145,7 +153,8 @@ fn describe(
     let rel_path = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
     let rel = rel_path.to_string_lossy().into_owned();
     let name = path.file_name()?.to_string_lossy().into_owned();
-    let (mut kind, triple) = cargo_profile(&rel_path).unwrap_or_else(|| ("binary".into(), None));
+    let (mut kind, triple) =
+        cargo_profile(&rel_path).unwrap_or_else(|| (build_config(&rel_path).unwrap_or("binary").into(), None));
 
     let arch = if head.starts_with(b"\x7fELF") {
         elf_summary(&path, head).unwrap_or_else(|| "elf".into())
@@ -167,7 +176,7 @@ fn describe(
     let dest = install_dir.join(&name);
     let shadowed_by = shadowing_copy(&name, &dest);
     let installed = installed_state(&path, size, modified, &dest);
-    let stale = rel.starts_with("target/") && newest_src > modified;
+    let stale = rel_path.starts_with("target") && newest_src > modified;
     Some(Candidate {
         path,
         name,
@@ -182,6 +191,20 @@ fn describe(
         dest,
         shadowed_by,
         desktop: Vec::new(),
+    })
+}
+
+/// The configuration a Visual Studio or multi-config CMake build went to: `build/Release/app.exe`
+/// → "release", `x64/Debug/app.exe` → "debug".
+fn build_config(rel: &Path) -> Option<&'static str> {
+    let dirs = rel.parent()?.components().filter_map(|c| match c {
+        Component::Normal(s) => s.to_str(),
+        _ => None,
+    });
+    dirs.rev().find_map(|d| match d.to_ascii_lowercase().as_str() {
+        "release" | "relwithdebinfo" | "minsizerel" => Some("release"),
+        "debug" => Some("debug"),
+        _ => None,
     })
 }
 

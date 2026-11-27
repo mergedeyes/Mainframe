@@ -18,6 +18,8 @@ it.
 | Python | `.venv`, `venv`, every `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.nox`, coverage, `build`, `dist`, `*.egg-info` |
 | Zig | `zig-out`, `.zig-cache` |
 | CMake, Meson | `build`, `build-release`, `builddir`, `cmake-build-*` |
+| .NET | `bin`, `obj` of each project, `.vs` |
+| Visual C++ | `x64`, `ARM64`, `Debug`, `Release`, `.vs` |
 | Go | `build`, `bin`, and Go's build cache (shared by all your Go projects) |
 | any | the project's own `clean` target (make, just, npm script, CMake), and folders marked as a cache (`CACHEDIR.TAG`), like a `target` whose `Cargo.toml` is gone |
 

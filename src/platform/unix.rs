@@ -168,6 +168,18 @@ pub fn trash(path: &Path) -> io::Result<()> {
     Err(io::Error::other(if msg.is_empty() { format!("{program} failed") } else { msg }))
 }
 
+pub fn dev_env() -> &'static [(std::ffi::OsString, std::ffi::OsString)] {
+    &[]
+}
+
+pub fn msvc_available() -> bool {
+    false
+}
+
+pub(super) fn decode_legacy(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 pub(super) fn free_space(path: &Path) -> Option<u64> {
     let c = CString::new(path.as_os_str().as_bytes()).ok()?;
     // SAFETY: c is a valid C string and st a statvfs to fill.

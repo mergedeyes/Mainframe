@@ -52,7 +52,7 @@ switch between tabs.
 | `w` / `z` | hide or show the output pane / make it fill the screen |
 
 Mainframe knows the usual commands of Cargo, Go, npm, Python, Zig, CMake,
-Meson, Make and just. For anything else the project defines, press `T`: the
+Meson, Make, just, .NET and MSBuild. For anything else the project defines, press `T`: the
 task picker lists package.json scripts, make targets, cargo binaries and
 more.
 

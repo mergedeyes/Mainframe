@@ -20,7 +20,10 @@ runs that file instead:
 
 - a Rust file in `src/bin/` or `examples/`: `cargo run --bin …` or `--example …`
 - a script: `.py`, `.sh`, `.bash`, `.zsh`, `.fish`, `.js`, `.ts`, `.rb`, `.lua`, `.pl`, `.php`, `.go`
-- a single `.rs`, `.c` or `.cpp` file: compiled to a temporary program and run
+- a PowerShell script (`.ps1`)
+- a single `.rs`, `.c` or `.cpp` file: compiled to a temporary program and
+  run. On Windows that's with `cl` when Visual Studio is installed, else
+  `clang` or `gcc`
 - anything executable
 
 The `runners` setting in the [configuration](../reference/config.md)
@@ -90,7 +93,8 @@ seconds, 0 turns it off.
 ## Jumping to errors
 
 `n` jumps to the next `file:line` in the output: compiler errors, warnings,
-panics, Python tracebacks. `N` goes to the previous one. With the output
+panics, Python tracebacks, and the `file(line,col)` that MSVC, MSBuild, C#
+and tsc write. `N` goes to the previous one. With the output
 focused (`Tab`), `Enter` opens the file in your editor at that line, `o` in
 VS Code.
 

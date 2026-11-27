@@ -294,6 +294,20 @@ fn is_btrfs(path: &Path) -> bool {
     unsafe { libc::statfs(c.as_ptr(), &mut st) == 0 && st.f_type as i64 == BTRFS_SUPER_MAGIC }
 }
 
+const DOTNET: &[(&str, &str)] = &[
+    ("bin", "build output — dotnet build brings it back"),
+    ("obj", "intermediate files and restored packages — dotnet build brings them back"),
+    (".vs", "Visual Studio's caches for this folder"),
+];
+
+const MSBUILD: &[(&str, &str)] = &[
+    ("x64", "x64 build output — msbuild brings it back"),
+    ("ARM64", "ARM64 build output — msbuild brings it back"),
+    ("Debug", "Win32 debug build output — msbuild brings it back"),
+    ("Release", "Win32 release build output — msbuild brings it back"),
+    (".vs", "Visual Studio's caches for this folder"),
+];
+
 const NODE: &[(&str, &str)] = &[
     ("node_modules", "installed packages — the package manager's install brings them back"),
     (".next", "Next.js build output and cache"),
@@ -483,6 +497,8 @@ fn scan_one(project: &Project, shared: bool) -> Vec<Item> {
                     go_cache(root, &mut items);
                 }
             }
+            Kind::Dotnet => named(root, DOTNET, &mut items),
+            Kind::MsBuild => named(root, MSBUILD, &mut items),
             Kind::Make | Kind::Just => {}
         }
     }

@@ -2,18 +2,19 @@
 
 use std::{
     env,
-    ffi::{OsStr, c_void},
+    ffi::{OsStr, OsString, c_void},
     fs::{self, Metadata, OpenOptions},
     io, iter,
     os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle, process::CommandExt},
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::{Child, Command, Stdio},
     ptr,
     sync::OnceLock,
 };
 
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, SYSTEMTIME},
+    Globalization::{CP_OEMCP, MultiByteToWideChar},
     Storage::FileSystem::{
         BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
         FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileStandardInfo,
@@ -33,7 +34,7 @@ use windows_sys::Win32::{
     },
 };
 
-use super::{DiskUse, home};
+use super::{DiskUse, home, which};
 
 /// `%APPDATA%` (roams with the profile) or `%LOCALAPPDATA%` (stays on this machine).
 fn known(var: &str, fallback: &str) -> PathBuf {
@@ -225,6 +226,77 @@ pub fn trash(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Visual Studio's C++ build environment (what a Developer PowerShell has): the variables
+/// `vcvarsall.bat` sets or changes, worked out once. Empty without Visual Studio, or when
+/// `cl` is on PATH already (Mainframe was started from a developer prompt).
+pub fn dev_env() -> &'static [(OsString, OsString)] {
+    static ENV: OnceLock<Vec<(OsString, OsString)>> = OnceLock::new();
+    ENV.get_or_init(|| if which("cl").is_some() { Vec::new() } else { load_dev_env().unwrap_or_default() })
+}
+
+/// Whether MSVC can be used: on PATH, or through [`dev_env`].
+pub fn msvc_available() -> bool {
+    which("cl").is_some() || vs_install().is_some()
+}
+
+/// The newest Visual Studio (or Build Tools) with the C++ tools for this machine, by vswhere.
+fn vs_install() -> Option<&'static Path> {
+    static VS: OnceLock<Option<PathBuf>> = OnceLock::new();
+    VS.get_or_init(|| {
+        let vswhere =
+            PathBuf::from(env::var_os("ProgramFiles(x86)")?).join(r"Microsoft Visual Studio\Installer\vswhere.exe");
+        let tools = if cfg!(target_arch = "aarch64") {
+            "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+        } else {
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+        };
+        let mut c = Command::new(vswhere);
+        c.args(["-latest", "-products", "*", "-requires", tools, "-property", "installationPath", "-utf8"]);
+        let out = c.creation_flags(CREATE_NO_WINDOW).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+        let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        path.join(VCVARS).is_file().then_some(path)
+    })
+    .as_deref()
+}
+
+const VCVARS: &str = r"VC\Auxiliary\Build\vcvarsall.bat";
+
+fn load_dev_env() -> Option<Vec<(OsString, OsString)>> {
+    let bat = vs_install()?.join(VCVARS);
+    let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" };
+    let mut c = Command::new(env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into()));
+    // cmd reads its own command line: /s keeps everything between the outer quotes as is.
+    c.args(["/d", "/s", "/c"]).raw_arg(format!("\"\"{}\" {arch} >nul && set\"", bat.display()));
+    let out = c.creation_flags(CREATE_NO_WINDOW).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = super::decode(&out.stdout);
+    let vars = text
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        // `Platform=x64` makes `dotnet build` look for x64 builds of AnyCPU projects.
+        .filter(|(k, _)| !k.eq_ignore_ascii_case("Platform") && !k.is_empty())
+        .filter(|(k, v)| env::var_os(k).as_deref() != Some(OsStr::new(v)))
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        .collect();
+    Some(vars)
+}
+
+pub(super) fn decode_legacy(bytes: &[u8]) -> String {
+    let Ok(len) = i32::try_from(bytes.len()) else { return String::from_utf8_lossy(bytes).into_owned() };
+    // SAFETY: the first call only measures; the second writes at most `n` u16s into `wide`.
+    unsafe {
+        let n = MultiByteToWideChar(CP_OEMCP, 0, bytes.as_ptr(), len, ptr::null_mut(), 0);
+        if n <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        let mut wide = vec![0u16; n as usize];
+        let n = MultiByteToWideChar(CP_OEMCP, 0, bytes.as_ptr(), len, wide.as_mut_ptr(), n);
+        String::from_utf16_lossy(&wide[..n.max(0) as usize])
+    }
+}
+
 pub(super) fn free_space(path: &Path) -> Option<u64> {
     let dir = wide(path.as_os_str());
     let mut free = 0u64;
@@ -275,7 +347,23 @@ pub(super) fn disk_use(path: &Path, meta: &Metadata) -> DiskUse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::which;
+
+    #[test]
+    fn oem_bytes_are_decoded() {
+        // ü in code page 850 and 437 both.
+        assert_eq!(super::super::decode(b"Verk\x81rzung"), "Verkürzung");
+        assert_eq!(super::super::decode("Verkürzung".as_bytes()), "Verkürzung");
+    }
+
+    #[test]
+    fn visual_studio_environment() {
+        if vs_install().is_none() {
+            return;
+        }
+        let env = dev_env();
+        assert!(env.iter().any(|(k, _)| k.eq_ignore_ascii_case("INCLUDE")), "{env:?}");
+        assert!(!env.iter().any(|(k, _)| k.eq_ignore_ascii_case("Platform")));
+    }
 
     #[test]
     fn program_names_drop_their_extension() {

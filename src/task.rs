@@ -17,8 +17,7 @@ use crate::{
     ansi,
     cmd::Cmd,
     locate::{self, Loc},
-    run::{self, Control, Ctx, Msg, Sink},
-    shell::Shell,
+    run::{self, Control, Ctx, Msg, Setup, Sink},
 };
 
 const MAX_LINES: usize = 20_000;
@@ -32,12 +31,12 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn spawn(label: String, cmd: &Cmd, cwd: &Path, shell: &Shell) -> std::io::Result<Self> {
+    pub fn spawn(label: String, cmd: &Cmd, cwd: &Path, setup: &Setup) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let control = Arc::new(Control::default());
-        let (ctl, cmd, cwd, shell) = (control.clone(), cmd.clone(), cwd.to_path_buf(), shell.clone());
+        let (ctl, cmd, cwd, setup) = (control.clone(), cmd.clone(), cwd.to_path_buf(), setup.clone());
         thread::Builder::new().name(format!("task {label}")).spawn(move || {
-            let mut ctx = Ctx::new(&cwd, shell, Sink::Pane(tx.clone()), &ctl);
+            let mut ctx = Ctx::new(&cwd, setup, Sink::Pane(tx.clone()), &ctl);
             let exit = run::run(&cmd, &mut ctx);
             let _ = tx.send(Msg::Done(exit));
         })?;
@@ -247,7 +246,7 @@ mod tests {
 
     /// Polls until the task ends; the plain text of its output, and how it ended.
     fn finish(cmd: Cmd, cwd: &Path) -> (Vec<String>, Exit) {
-        let mut task = Task::spawn("t".into(), &cmd, cwd, &Shell::default()).unwrap();
+        let mut task = Task::spawn("t".into(), &cmd, cwd, &Setup::default()).unwrap();
         let mut out = Output::new(cwd);
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
@@ -305,7 +304,7 @@ mod tests {
         let dir = temp_dir("task-kill");
         // A shell waiting on a child: both have to go for the task to end.
         let line = if cfg!(windows) { "Start-Sleep 30; Write-Output done" } else { "sleep 30; echo done" };
-        let mut task = Task::spawn("t".into(), &Cmd::Shell(line.into()), &dir, &Shell::default()).unwrap();
+        let mut task = Task::spawn("t".into(), &Cmd::Shell(line.into()), &dir, &Setup::default()).unwrap();
         let mut out = Output::new(&dir);
         thread::sleep(Duration::from_millis(500));
         let started = Instant::now();

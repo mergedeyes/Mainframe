@@ -54,6 +54,8 @@ and `t` then do what that build tool usually does:
 | Python (uv, poetry, pip) | `pyproject.toml`, `setup.py` | `uv build`, `poetry build` or `python -m build` | same | `pytest` (through uv or poetry when the project uses them) |
 | Zig | `build.zig` | `zig build` | `zig build -Doptimize=ReleaseFast` | `zig build test` |
 | CMake | `CMakeLists.txt` | configure + build in `build/` | in `build-release/` | `ctest` |
+| .NET | `*.sln`, `*.slnx`, `*.csproj`, `*.fsproj`, `*.vbproj` | `dotnet build` | `dotnet build -c Release` | `dotnet test` |
+| Visual C++ | `*.vcxproj`, or a solution with one | `msbuild` in Debug | in Release | — |
 | Meson | `meson.build` | `meson compile -C build` | in `build-release/` | `meson test` |
 | Make | `Makefile` | `make` | same | `make test` |
 | just | `justfile` | `just build` | same | `just test` |
@@ -61,6 +63,10 @@ and `t` then do what that build tool usually does:
 Mainframe looks for these files in the current folder and the folders above
 it, but not above your home folder. So in `~/Projekte/watcher/crates/api/src`
 the project is the nearest folder with a `Cargo.toml`.
+
+`r` in a .NET project runs the project that can run (a console or web app).
+In a solution with more than one, `T` lists a `run` for each. CMake builds
+pass `--config`, so `B` is a release build with Visual Studio's generator too.
 
 `T` lists everything else a project can run: package.json scripts, make
 targets, just recipes, every cargo binary and example, and more. See
