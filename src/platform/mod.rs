@@ -53,6 +53,42 @@ pub fn cache_dir() -> PathBuf {
     xdg("XDG_CACHE_HOME").unwrap_or_else(sys::default_cache_dir)
 }
 
+/// `fs::canonicalize`, but on Windows without the `\\?\` it puts in front (`\\?\C:\Users\…`)
+/// when the path works without it: everything else (git, the home folder, what users type)
+/// has paths without it, and those must compare equal.
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(path).map(simplify)
+}
+
+fn simplify(p: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return p;
+    }
+    let s = p.to_string_lossy();
+    let plain = if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        let b = rest.as_bytes();
+        // Only `X:\…`; other verbatim paths (volume GUIDs) have no plain form.
+        if b.len() < 3 || !b[0].is_ascii_alphabetic() || b[1] != b':' || b[2] != b'\\' {
+            return p;
+        }
+        rest.to_string()
+    } else {
+        return p;
+    };
+    // Too long, or names Windows only accepts verbatim (trailing dot or space, CON, NUL…).
+    let reserved = |c: &str| {
+        let stem = c.split('.').next().unwrap_or(c).to_ascii_uppercase();
+        matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || (stem.len() == 4
+                && (stem.starts_with("COM") || stem.starts_with("LPT"))
+                && stem.as_bytes()[3].is_ascii_digit())
+    };
+    let ok = plain.len() < 260 && plain.split('\\').skip(1).all(|c| !c.ends_with(['.', ' ']) && !reserved(c));
+    if ok { PathBuf::from(plain) } else { p }
+}
+
 /// Finds a program on PATH. On Windows `cargo` finds `cargo.exe`, `code` finds `code.cmd`.
 pub fn which(name: &str) -> Option<PathBuf> {
     env::split_paths(&env::var_os("PATH")?).find_map(|dir| sys::program_in(&dir, name))
@@ -95,4 +131,20 @@ pub struct DiskUse {
 /// `meta` is the file's own metadata (not following symlinks).
 pub fn disk_use(path: &Path, meta: &Metadata) -> DiskUse {
     sys::disk_use(path, meta)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verbatim_paths_lose_their_prefix_when_they_can() {
+        let s = |p: &str| simplify(PathBuf::from(p)).to_string_lossy().into_owned();
+        assert_eq!(s(r"\\?\C:\Users\jan\x"), r"C:\Users\jan\x");
+        assert_eq!(s(r"\\?\UNC\server\share\x"), r"\\server\share\x");
+        assert_eq!(s(r"\\?\C:\dir\nul.txt"), r"\\?\C:\dir\nul.txt");
+        assert_eq!(s(r"\\?\C:\dir\trailing."), r"\\?\C:\dir\trailing.");
+        assert_eq!(s(r"\\?\Volume{0000}\x"), r"\\?\Volume{0000}\x");
+        assert!(!canonicalize(&env::temp_dir()).unwrap().to_string_lossy().starts_with(r"\\?\"));
+    }
 }

@@ -749,7 +749,8 @@ mod tests {
         fs::create_dir_all(wt.join("node_modules")).unwrap();
 
         let items = scan(&root);
-        let titles: Vec<String> = items.iter().map(|i| i.title()).collect();
+        // Shown with the system's separator; what's compared here is which ones.
+        let titles: Vec<String> = items.iter().map(|i| i.title().replace('\\', "/")).collect();
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&wt);
 

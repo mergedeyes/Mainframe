@@ -204,7 +204,7 @@ mod tests {
                 "Clicker/win/",
             ],
         );
-        let mut names: Vec<_> = scan(&root).into_iter().map(|e| (e.name, e.kind)).collect();
+        let mut names: Vec<_> = scan(&root).into_iter().map(|e| (e.name.replace('\\', "/"), e.kind)).collect();
         names.sort();
         assert_eq!(
             names,

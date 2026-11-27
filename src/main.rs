@@ -66,7 +66,7 @@ fn main() -> Result<()> {
         Some(arg) => PathBuf::from(arg),
         None => env::current_dir()?,
     };
-    let start = start.canonicalize()?;
+    let start = platform::canonicalize(&start)?;
     let (config, config_err) = Config::load();
     let mut app = App::new(start, config, config_err);
 

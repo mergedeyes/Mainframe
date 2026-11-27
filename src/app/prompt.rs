@@ -182,7 +182,7 @@ impl App {
             PromptKind::Cd => {
                 let path = self.resolve(&input);
                 if path.is_dir() {
-                    self.browser.cd(path.canonicalize().unwrap_or(path));
+                    self.browser.cd(crate::platform::canonicalize(&path).unwrap_or(path));
                 } else if path.exists() {
                     let parent = path.parent().unwrap_or(Path::new("/")).to_path_buf();
                     self.browser.cd(parent);
