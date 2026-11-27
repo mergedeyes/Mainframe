@@ -94,6 +94,40 @@ pub fn list(p: &Project) -> Vec<Target> {
                 add("meson", name, Cmd::words(cmd));
             }
         }
+        Kind::Dotnet => {
+            for (name, cmd) in [
+                ("build", "dotnet build"),
+                ("release", "dotnet build -c Release"),
+                ("test", "dotnet test"),
+                ("format", "dotnet format"),
+                ("clean", "dotnet clean"),
+                ("restore", "dotnet restore"),
+                ("publish", "dotnet publish -c Release"),
+            ] {
+                add("dotnet", name, Cmd::words(cmd));
+            }
+            for proj in dotnet_runnable(root) {
+                let name = proj.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                let run = if proj == *root {
+                    Cmd::words("dotnet run")
+                } else {
+                    Step::words("dotnet run --project").path(&proj).into()
+                };
+                add("run", &name, run);
+            }
+        }
+        Kind::MsBuild => {
+            for (name, config, target) in [
+                ("build", "Debug", None),
+                ("release", "Release", None),
+                ("rebuild", "Debug", Some("Rebuild")),
+                ("clean", "Debug", Some("Clean")),
+            ] {
+                if let Ok(cmd) = project::msbuild(root, config, target) {
+                    add("msbuild", name, cmd);
+                }
+            }
+        }
         Kind::Npm | Kind::Make | Kind::Just => {}
     }
 
@@ -243,6 +277,60 @@ fn in_env(root: &Path, step: Step) -> Step {
         Some(r) => Step::new(r).arg("run").arg(step.program).args(step.args),
         None => step,
     }
+}
+
+/// Folders of the .NET projects `dotnet run` can start: `root` itself when it holds an
+/// executable project, else those its solution names (and those right below it).
+pub fn dotnet_runnable(root: &Path) -> Vec<std::path::PathBuf> {
+    let is_proj = |p: &Path| {
+        p.extension().is_some_and(|e| {
+            ["csproj", "fsproj", "vbproj"].contains(&e.to_string_lossy().to_ascii_lowercase().as_str())
+        })
+    };
+    let projects_in = |dir: &Path| -> Vec<std::path::PathBuf> {
+        fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| is_proj(p)).collect()).unwrap_or_default()
+    };
+    let here = projects_in(root);
+    let projects: Vec<std::path::PathBuf> = if here.is_empty() {
+        let mut found: Vec<_> = fs::read_dir(root)
+            .map(|rd| rd.flatten().filter(|e| e.path().is_dir()).flat_map(|e| projects_in(&e.path())).collect())
+            .unwrap_or_default();
+        found.extend(solution_projects(root));
+        found
+    } else {
+        here
+    };
+    let mut dirs: Vec<std::path::PathBuf> = projects
+        .into_iter()
+        .filter(|p| fs::read_to_string(p).is_ok_and(|t| runnable_project(&t)))
+        .filter_map(|p| p.parent().map(Path::to_path_buf))
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// An executable: OutputType Exe/WinExe, or a web app (the Web SDK runs without one).
+fn runnable_project(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    t.contains("<outputtype>exe</outputtype>")
+        || t.contains("<outputtype>winexe</outputtype>")
+        || t.contains("sdk=\"microsoft.net.sdk.web\"")
+        || t.contains("sdk=\"microsoft.net.sdk.worker\"")
+}
+
+/// Projects a .sln or .slnx in `root` names, by path.
+fn solution_projects(root: &Path) -> Vec<std::path::PathBuf> {
+    let Some(sln) = project::vs_file(root) else { return Vec::new() };
+    let Ok(text) = fs::read_to_string(&sln) else { return Vec::new() };
+    text.split('"')
+        .filter(|s| {
+            let l = s.to_ascii_lowercase();
+            l.ends_with(".csproj") || l.ends_with(".fsproj") || l.ends_with(".vbproj")
+        })
+        .map(|s| root.join(s.replace('\\', std::path::MAIN_SEPARATOR_STR)))
+        .filter(|p| p.is_file())
+        .collect()
 }
 
 pub fn python_plan(op: Op, root: &Path) -> Result<Cmd, String> {

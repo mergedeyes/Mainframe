@@ -23,6 +23,10 @@ pub enum Kind {
     Meson,
     Make,
     Just,
+    /// .NET: a solution or C#/F#/VB project.
+    Dotnet,
+    /// Visual C++: a .vcxproj, or a solution with one.
+    MsBuild,
 }
 
 impl Kind {
@@ -37,6 +41,8 @@ impl Kind {
             Kind::Meson => "meson",
             Kind::Make => "make",
             Kind::Just => "just",
+            Kind::Dotnet => "dotnet",
+            Kind::MsBuild => "msbuild",
         }
     }
 }
@@ -100,6 +106,9 @@ pub fn detect(start: &Path) -> Option<Project> {
             let name = match kind {
                 Kind::Cargo => cargo_name(d),
                 Kind::Python => targets::python_name(d),
+                Kind::Dotnet | Kind::MsBuild => {
+                    vs_file(d).and_then(|f| f.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                }
                 _ => None,
             }
             .or_else(|| d.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -113,12 +122,56 @@ pub fn detect(start: &Path) -> Option<Project> {
 
 /// The build tool whose marker sits right in `dir` (no walking up).
 pub fn kind_at(dir: &Path) -> Option<Kind> {
-    MARKERS.iter().find(|(_, files)| files.iter().any(|f| dir.join(f).is_file())).map(|&(k, _)| k)
+    kinds_at(dir).into_iter().next()
 }
 
-/// Every build tool with a marker right in `dir`, most specific first.
+/// Every build tool with a marker right in `dir`, most specific first. .NET and MSBuild
+/// projects come after cargo and go: an ASP.NET app with a package.json is .NET.
 pub fn kinds_at(dir: &Path) -> Vec<Kind> {
-    MARKERS.iter().filter(|(_, files)| files.iter().any(|f| dir.join(f).is_file())).map(|&(k, _)| k).collect()
+    let mut kinds: Vec<Kind> =
+        MARKERS.iter().filter(|(_, files)| files.iter().any(|f| dir.join(f).is_file())).map(|&(k, _)| k).collect();
+    if let Some(k) = visual_studio_kind(dir) {
+        let at = kinds.iter().take_while(|k| matches!(k, Kind::Cargo | Kind::Go)).count();
+        kinds.insert(at, k);
+    }
+    kinds
+}
+
+/// Solution and project files: the solution when there is one, else the project.
+pub fn vs_file(dir: &Path) -> Option<PathBuf> {
+    let files = vs_files(dir);
+    let is =
+        |p: &&PathBuf, exts: &[&str]| p.extension().is_some_and(|e| exts.iter().any(|x| e.eq_ignore_ascii_case(x)));
+    let found = files.iter().find(|p| is(p, &["sln", "slnx"])).or_else(|| files.first());
+    found.cloned()
+}
+
+fn vs_files(dir: &Path) -> Vec<PathBuf> {
+    const EXTS: [&str; 6] = ["sln", "slnx", "csproj", "fsproj", "vbproj", "vcxproj"];
+    let Ok(rd) = fs::read_dir(dir) else { return Vec::new() };
+    let mut files: Vec<PathBuf> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| EXTS.iter().any(|x| e.eq_ignore_ascii_case(x))) && p.is_file())
+        .collect();
+    files.sort();
+    files
+}
+
+/// MSBuild when there's C++ (a .vcxproj, or a solution naming one): `dotnet build`
+/// can't build those. .NET for the rest.
+fn visual_studio_kind(dir: &Path) -> Option<Kind> {
+    let files = vs_files(dir);
+    if files.is_empty() {
+        return None;
+    }
+    let cpp = files.iter().any(|f| {
+        let ext = f.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        ext == "vcxproj"
+            || (matches!(ext.as_str(), "sln" | "slnx")
+                && fs::read_to_string(f).is_ok_and(|t| t.to_ascii_lowercase().contains(".vcxproj")))
+    });
+    Some(if cpp { Kind::MsBuild } else { Kind::Dotnet })
 }
 
 fn cargo_name(root: &Path) -> Option<String> {
@@ -188,6 +241,20 @@ pub fn plan(op: Op, target: Option<&Entry>, cwd: &Path, cfg: &Config) -> Result<
         (Kind::Just, Op::Run) => w("just"),
         (Kind::Just, Op::Build | Op::Release) => w("just build"),
         (Kind::Just, Op::Test) => w("just test"),
+        (Kind::Dotnet, Op::Run) => match targets::dotnet_runnable(&p.root).as_slice() {
+            [] => return Err("nothing here dotnet can run — T lists its tasks".into()),
+            [one] if *one == p.root => w("dotnet run"),
+            [one] => Step::words("dotnet run --project").path(one).into(),
+            _ => return Err("more than one project can run — T lists them".into()),
+        },
+        (Kind::Dotnet, Op::Build) => w("dotnet build"),
+        (Kind::Dotnet, Op::Release) => w("dotnet build -c Release"),
+        (Kind::Dotnet, Op::Test) => w("dotnet test"),
+        (Kind::MsBuild, Op::Build) => msbuild(&p.root, "Debug", None)?,
+        (Kind::MsBuild, Op::Release) => msbuild(&p.root, "Release", None)?,
+        (Kind::MsBuild, Op::Run | Op::Test) => {
+            return Err(format!("msbuild doesn't say what to {} — T lists its tasks", op.verb()));
+        }
         (Kind::Python, _) => unreachable!(),
     };
     Ok(Plan { cmd, cwd: p.root })
@@ -243,6 +310,19 @@ fn file_plan(op: Op, f: &Entry, project: Option<&Project>, cfg: &Config) -> Opti
         _ => return None,
     };
     Some(Plan { cmd, cwd: dir })
+}
+
+/// msbuild on the solution (or project) in `root`, in `config`, with `target` (Clean,
+/// Rebuild) when given. Full paths in messages, so jumping to an error works from anywhere.
+pub fn msbuild(root: &Path, config: &str, target: Option<&str>) -> Result<Cmd, String> {
+    let file = vs_file(root).ok_or("no solution or project file here")?;
+    let name = file.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let mut step = Step::new("msbuild").arg(name).args(["-nologo", "-m", "-p:GenerateFullPaths=true"]);
+    step = step.arg(format!("-p:Configuration={config}"));
+    if let Some(t) = target {
+        step = step.arg(format!("-t:{t}"));
+    }
+    Ok(step.into())
 }
 
 /// Python 3: `python3` on Unix; on Windows the `py` launcher when it's there (`python3` there
@@ -350,6 +430,63 @@ mod windows_tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A console app: `b` builds it, `r` runs it.
+    #[test]
+    fn dotnet_builds_and_runs() {
+        if platform::which("dotnet").is_none() {
+            return;
+        }
+        let dir = temp_dir("dotnet-run");
+        fs::write(dir.join("Hello.csproj"), super::visual_studio_tests::CONSOLE).unwrap();
+        fs::write(dir.join("Program.cs"), "System.Console.WriteLine(\"hello from dotnet\");\n").unwrap();
+        let cfg = Config::default();
+        for op in [Op::Build, Op::Run] {
+            let plan = plan(op, None, &dir, &cfg).unwrap();
+            let (ok, out) = run_in(&plan.cmd, &plan.cwd);
+            assert!(ok, "{out}");
+            if op == Op::Run {
+                assert!(out.contains("hello from dotnet"), "{out}");
+            }
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A Visual Studio solution (made by CMake's generator): `b` and `R` build it with msbuild.
+    #[test]
+    fn msbuild_builds_a_cpp_solution() {
+        if !platform::msvc_available() || platform::which("cmake").is_none() {
+            return;
+        }
+        let dir = temp_dir("msbuild-run");
+        let src = dir.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("CMakeLists.txt"),
+            "cmake_minimum_required(VERSION 3.20)\nproject(game C)\nadd_executable(game main.c)\n",
+        )
+        .unwrap();
+        fs::write(src.join("main.c"), "int main(void) { return 0; }\n").unwrap();
+        let vs = dir.join("vs");
+        let generate = Step::new("cmake").arg("-S").path(&src).arg("-B").path(&vs);
+        let (ok, out) = run_in(&generate.into(), &dir);
+        assert!(ok, "{out}");
+        let p = detect(&vs).unwrap();
+        assert_eq!(
+            p.kind,
+            Kind::MsBuild,
+            "{:?}",
+            fs::read_dir(&vs).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+        let cfg = Config::default();
+        for (op, exe) in [(Op::Build, r"Debug\game.exe"), (Op::Release, r"Release\game.exe")] {
+            let plan = plan(op, None, &vs, &cfg).unwrap();
+            let (ok, out) = run_in(&plan.cmd, &plan.cwd);
+            assert!(ok, "{out}");
+            assert!(vs.join(exe).is_file(), "no {exe}:\n{out}");
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// `r` on a C file: compiled with cl, then run.
     #[test]
     fn runs_a_c_file_with_cl() {
@@ -365,5 +502,60 @@ mod windows_tests {
         assert!(ok, "{out}");
         assert!(out.contains("hello from cl"), "{out}");
         assert!(plan.cmd.display(&crate::shell::Shell::default()).starts_with("cl "), "{out}");
+    }
+}
+
+#[cfg(test)]
+pub(super) mod visual_studio_tests {
+    use super::*;
+    use crate::{shell::Shell, testutil::temp_dir};
+
+    pub const CONSOLE: &str = "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net10.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n";
+    const LIBRARY: &str = "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n  </PropertyGroup>\n</Project>\n";
+
+    fn shown(cmd: &Cmd) -> String {
+        cmd.display(&Shell::sh())
+    }
+
+    #[test]
+    fn dotnet_projects_and_solutions() {
+        let dir = temp_dir("dotnet-kinds");
+        let (app, lib) = (dir.join("App"), dir.join("Lib"));
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(app.join("App.csproj"), CONSOLE).unwrap();
+        fs::write(lib.join("Lib.csproj"), LIBRARY).unwrap();
+        fs::write(dir.join("Demo.sln"), "Project(\"{FAE}\") = \"App\", \"App\\App.csproj\", \"{1}\"\nEndProject\n")
+            .unwrap();
+        // An ASP.NET app with a frontend is .NET first.
+        fs::write(dir.join("package.json"), "{}").unwrap();
+
+        assert_eq!(kinds_at(&dir), [Kind::Dotnet, Kind::Npm]);
+        let p = detect(&dir).unwrap();
+        assert_eq!((p.kind, p.name.as_str()), (Kind::Dotnet, "Demo"));
+        assert_eq!(targets::dotnet_runnable(&dir), std::slice::from_ref(&app));
+        let cfg = Config::default();
+        let run = plan(Op::Run, None, &dir, &cfg).unwrap();
+        assert!(shown(&run.cmd).starts_with("dotnet run --project "), "{}", shown(&run.cmd));
+        assert_eq!(shown(&plan(Op::Release, None, &dir, &cfg).unwrap().cmd), "dotnet build -c Release");
+        assert_eq!(shown(&plan(Op::Run, None, &app, &cfg).unwrap().cmd), "dotnet run");
+        assert!(plan(Op::Run, None, &lib, &cfg).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cpp_solutions_build_with_msbuild() {
+        let dir = temp_dir("msbuild-kinds");
+        fs::write(dir.join("Game.sln"), "Project(\"{8BC}\") = \"Game\", \"Game\\Game.vcxproj\", \"{2}\"\nEndProject\n")
+            .unwrap();
+        let p = detect(&dir).unwrap();
+        assert_eq!(p.kind, Kind::MsBuild);
+        let cfg = Config::default();
+        assert_eq!(
+            shown(&plan(Op::Release, None, &dir, &cfg).unwrap().cmd),
+            "msbuild Game.sln -nologo -m -p:GenerateFullPaths=true -p:Configuration=Release"
+        );
+        assert!(plan(Op::Run, None, &dir, &cfg).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

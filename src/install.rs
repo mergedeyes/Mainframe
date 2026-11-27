@@ -201,12 +201,11 @@ fn build_config(rel: &Path) -> Option<&'static str> {
         Component::Normal(s) => s.to_str(),
         _ => None,
     });
-    dirs.filter_map(|d| match d.to_ascii_lowercase().as_str() {
+    dirs.rev().find_map(|d| match d.to_ascii_lowercase().as_str() {
         "release" | "relwithdebinfo" | "minsizerel" => Some("release"),
         "debug" => Some("debug"),
         _ => None,
     })
-    .last()
 }
 
 /// `target/release/foo` → ("release", None)
