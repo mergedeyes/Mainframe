@@ -242,7 +242,7 @@ impl App {
         self.set_status(format!("reloaded {rel}"), Level::Info);
     }
 
-    /// ^G: publish a draft (after asking), or commit and push a post's changes.
+    /// ^G: publish a draft (after asking), or commit and push a post's or the /now page's changes.
     fn go_live(&mut self) {
         let Mode::Post(ed) = &mut self.mode else { return };
         if ed.conflict {
@@ -268,6 +268,10 @@ impl App {
                     blog::rel(&ed.root, &target),
                     post.title
                 )));
+            }
+            State::Now => {
+                let root = ed.root.clone();
+                self.push_now(root, &post.path);
             }
             State::Post => {
                 let msg = match blog::change(&ed.root, &post.path) {

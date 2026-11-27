@@ -105,7 +105,7 @@ fn help_column(sections: &[HelpSection]) -> Vec<Line<'static>> {
 }
 
 /// Only shown in the blog repo, where `L` does something.
-const BLOG: HelpSection = ("blog", &[("L", "drafts and posts")]);
+const BLOG: HelpSection = ("blog", &[("L", "drafts, posts and /now")]);
 
 pub(super) fn draw_help(f: &mut Frame, area: Rect, blog: bool) {
     let mut columns = HELP.map(help_column);

@@ -1,5 +1,5 @@
-//! `L` in the blog repo: its drafts and posts. New posts, editing (in `post_editor`, or the
-//! configured editor), publishing and pushing.
+//! `L` in the blog repo: its /now page, drafts and posts. New posts, editing (in
+//! `post_editor`, or the configured editor), publishing and pushing.
 
 use std::path::{Path, PathBuf};
 
@@ -67,6 +67,7 @@ impl App {
             KeyCode::Home | KeyCode::Char('g') => filter_list::step(state, len, -(len as isize)),
             KeyCode::End | KeyCode::Char('G') => filter_list::step(state, len, len as isize),
             KeyCode::Char('a') => self.new_post_form(),
+            KeyCode::Char('n') => self.open_now_page(),
             KeyCode::Enter | KeyCode::Char('e') => self.edit_post(false),
             KeyCode::Char('E') => self.edit_post(true),
             KeyCode::Char('p') => self.confirm_publish(),
@@ -134,10 +135,27 @@ impl App {
         }
     }
 
+    /// `n`: the /now page in the post editor, written from a template first when there's none.
+    fn open_now_page(&mut self) {
+        let Some(root) = self.blog_root.clone() else { return };
+        let path = root.join(blog::NOW);
+        if !path.exists() {
+            match blog::create_now(&root, &blog::today()) {
+                Ok(_) => self.set_status(format!("wrote {}", blog::NOW), Level::Ok),
+                Err(e) => return self.set_status(e, Level::Err),
+            }
+        }
+        self.open_post_editor(root, &path, Some(Part::Body));
+    }
+
     fn confirm_publish(&mut self) {
         let Some((root, post)) = self.picked_post() else { return };
-        if post.state == State::Post {
-            return self.set_status(format!("{} is published — P pushes your changes", post.rel()), Level::Info);
+        match post.state {
+            State::Post => {
+                return self.set_status(format!("{} is published — P pushes your changes", post.rel()), Level::Info);
+            }
+            State::Now => return self.set_status(format!("{} is no draft — P pushes it", post.rel()), Level::Info),
+            State::Draft => {}
         }
         let target = blog::publish_target(&root, &post, &blog::today());
         let target_rel = blog::rel(&root, &target);
@@ -163,8 +181,10 @@ impl App {
 
     fn push_post(&mut self) {
         let Some((root, post)) = self.picked_post() else { return };
-        if post.state == State::Draft {
-            return self.set_status(format!("{} is a draft — p publishes it", post.rel()), Level::Info);
+        match post.state {
+            State::Draft => return self.set_status(format!("{} is a draft — p publishes it", post.rel()), Level::Info),
+            State::Now => return self.push_now(root, &post.path),
+            State::Post => {}
         }
         let msg = match blog::change(&root, &post.path) {
             Change::None => return self.set_status(format!("no changes to {}", post.rel()), Level::Info),
@@ -175,9 +195,26 @@ impl App {
         self.commit_post(root, &post.path, msg);
     }
 
+    /// `P` / `^G` on the /now page: when it changed, sets `updated:` to today, then commits
+    /// and pushes it.
+    pub(super) fn push_now(&mut self, root: PathBuf, path: &Path) {
+        let msg = match blog::change(&root, path) {
+            Change::None => return self.set_status(format!("no changes to {}", blog::NOW), Level::Info),
+            Change::New => "now: add the /now page".to_string(),
+            Change::Edited => "now: update".to_string(),
+        };
+        if let Err(e) = blog::stamp_updated(path, &blog::today()) {
+            return self.set_status(e, Level::Err);
+        }
+        self.mode = Mode::Normal;
+        self.commit_post(root, path, msg);
+    }
+
     /// Commits and pushes in the output pane, then follows the GitHub Pages build when it can.
+    /// The /now page goes on its own; a post with everything in `_drafts` and `_posts`.
     pub(super) fn commit_post(&mut self, root: PathBuf, path: &Path, msg: String) {
-        let mut cmd = blog::commit_cmd(&root, &msg);
+        let now = blog::post(path).is_some_and(|p| p.state == State::Now);
+        let mut cmd = if now { blog::commit_now_cmd(&msg) } else { blog::commit_cmd(&root, &msg) };
         if let Some(follow) = blog::follow_pages_cmd(&root, path) {
             cmd = format!("{cmd} && {follow}");
         }
@@ -186,6 +223,9 @@ impl App {
 
     fn unpublish_post(&mut self) {
         let Some((root, post)) = self.picked_post() else { return };
+        if post.state == State::Now {
+            return self.set_status(format!("{} has no draft to go back to", post.rel()), Level::Info);
+        }
         match blog::unpublish(&root, &post) {
             Ok(path) => {
                 self.open_blog_picker(Some(&path));

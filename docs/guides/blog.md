@@ -19,10 +19,12 @@ other folder `L` does nothing.
 
 ## The picker
 
-`L` lists the drafts in `_drafts/` first, the ones you changed last on top,
-then the posts in `_posts/`, newest first. Each row shows whether it's a
-draft or a post, the post's date, and the title from its front matter (the
-file name when there is none).
+`L` lists the blog's [/now page](#the-now-page) on top when it has one,
+then the drafts in `_drafts/`, the ones you changed last on top, then the
+posts in `_posts/`, newest first. Each row shows whether it's the /now page,
+a draft or a post, the post's date (for the /now page, the day it was last
+updated), and the title from its front matter (the file name when there is
+none).
 
 Letters are commands here, so `/` starts the filter: type, then `Enter`
 keeps it, `Esc` clears it.
@@ -116,15 +118,45 @@ output pane, like everything else.
 
 `d` moves a draft or a post to the trash, after asking.
 
+## The /now page
+
+A [/now page](https://nownownow.com/about) says what you're up to at the
+moment. It isn't a post: it's one page, `now.md` at the top of the blog,
+that you rewrite whenever that changes, with the day of the last change in
+its front matter as `updated:`.
+
+`n` opens it in the post editor. When the blog has none yet, `n` writes one
+first:
+
+```yaml
+---
+layout: now
+title: "Now"
+description: "What I'm focused on at the moment."
+permalink: /now/
+updated: 2026-11-27
+---
+```
+
+The layout is `now` when the blog has `_layouts/now.html`, and `page`
+otherwise, which Jekyll themes have. Show `page.updated` in your layout to
+tell readers how current the page is.
+
+`P` in the picker, or `Ctrl-G` in the editor, pushes it: when `now.md` has
+changes, Mainframe sets `updated:` to today, commits only `now.md` with
+`now: update` (`now: add the /now page` the first time), and pushes. `p` and
+`u` don't apply to it, since it has no draft; `d` trashes it like a post.
+
 ## Following the GitHub Pages build
 
 With the [GitHub CLI](https://cli.github.com) (`gh`) installed and `origin`
 on GitHub, `p` and `P` wait for the Pages build of the commit they pushed,
 checking every five seconds for up to three minutes. Then they print and
 send a desktop notification: `post live:` with the post's address, or the
-build error.
+build error. For the /now page, that's `now page live:`.
 
-The address follows Jekyll's default permalink `/:year/:month/:day/:title/`,
+The address follows Jekyll's default permalink `/:year/:month/:day/:title/`
+(for the /now page, its `permalink:`, else `/now/`),
 on the domain in the `CNAME` file, or else `<owner>.github.io/<repo>`.
 Pages only builds the branch it's set up for, so pushing another branch
 ends with "no finished Pages build".

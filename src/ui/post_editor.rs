@@ -27,6 +27,7 @@ pub(super) fn draw_post_editor(f: &mut Frame, ed: &mut PostEditor, area: Rect) {
     let (state, color) = match ed.state {
         State::Draft => ("draft", Color::Yellow),
         State::Post => ("post", Color::Green),
+        State::Now => ("now", Color::Cyan),
     };
     let title = Line::from(vec![
         Span::styled(format!(" {state} "), Style::new().fg(color).bold()),
