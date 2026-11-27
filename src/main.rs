@@ -3,6 +3,7 @@ mod app;
 mod blog;
 mod browser;
 mod cleanup;
+mod cmd;
 mod complete;
 mod config;
 mod deploy;
@@ -24,6 +25,7 @@ mod projects;
 mod release;
 mod scaffold;
 mod settings;
+mod shell;
 mod targets;
 mod task;
 #[cfg(test)]
@@ -64,7 +66,7 @@ fn main() -> Result<()> {
         Some(arg) => PathBuf::from(arg),
         None => env::current_dir()?,
     };
-    let start = start.canonicalize()?;
+    let start = platform::canonicalize(&start)?;
     let (config, config_err) = Config::load();
     let mut app = App::new(start, config, config_err);
 
@@ -98,7 +100,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         }
 
         if let Some(fg) = app.pending.take() {
-            let output = run_foreground(terminal, &fg)?;
+            let output = run_foreground(terminal, &fg, &app.config.shell())?;
             app.after_foreground(&fg, output);
         }
     }
@@ -108,30 +110,24 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 
 /// Hands the real terminal to a command (nano, an interactive program, a shell).
 /// Returns its stdout when `cd_to_output` asked for it to be captured.
-fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground) -> Result<Option<String>> {
+fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground, shell: &shell::Shell) -> Result<Option<String>> {
     execute!(io::stdout(), DisableBracketedPaste)?;
     ratatui::restore();
     execute!(io::stdout(), cursor::Show)?;
     if fg.wait {
-        println!("\x1b[2m$ {}\x1b[0m", fg.cmd);
+        println!("\x1b[2m$ {}\x1b[0m", fg.cmd.display(shell));
     }
 
-    let mut command = platform::shell(&fg.cmd);
-    command.current_dir(&fg.cwd);
-    let (status, output) = if fg.cd_to_output {
-        // Pickers like fzf draw on /dev/tty, so piping stdout doesn't disturb them.
-        match command.stderr(Stdio::inherit()).output() {
-            Ok(out) => (Ok(out.status), Some(String::from_utf8_lossy(&out.stdout).into_owned())),
-            Err(e) => (Err(e), None),
-        }
-    } else {
-        (command.status(), None)
+    let (status, output) = match fg.cmd.launches(shell) {
+        Ok(launches) => run_launches(launches, fg, fg.wait),
+        Err(e) => (Err(e), None),
     };
 
     if fg.wait {
         match status {
-            Ok(s) if s.success() => print!("\n\x1b[32m✔ exited 0\x1b[0m"),
-            Ok(s) => print!("\n\x1b[31m✘ {}\x1b[0m", s.code().map_or("killed".into(), |c| format!("exit {c}"))),
+            Ok(None) => print!("\n\x1b[32m✔ nothing to do\x1b[0m"),
+            Ok(Some(s)) if s.success() => print!("\n\x1b[32m✔ exited 0\x1b[0m"),
+            Ok(Some(s)) => print!("\n\x1b[31m✘ {}\x1b[0m", s.code().map_or("killed".into(), |c| format!("exit {c}"))),
             Err(e) => print!("\n\x1b[31m✘ {e}\x1b[0m"),
         }
         print!(" — press Enter to return to mainframe ");
@@ -146,4 +142,39 @@ fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground) -> Result<Opt
     // cursor position, which some terminals answer slowly or not at all.
     *terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     Ok(output)
+}
+
+/// Runs the processes in the real terminal, one after another while they succeed. With
+/// `cd_to_output`, stdout is captured (pickers like fzf draw on the terminal itself, so
+/// that doesn't disturb them).
+fn run_launches(
+    launches: Vec<cmd::Launch>,
+    fg: &Foreground,
+    show_steps: bool,
+) -> (io::Result<Option<std::process::ExitStatus>>, Option<String>) {
+    let several = launches.len() > 1;
+    let mut captured = fg.cd_to_output.then(String::new);
+    let mut last = None;
+    for (i, mut l) in launches.into_iter().enumerate() {
+        if l.unless_exists.as_ref().is_some_and(|p| fg.cwd.join(p).exists()) {
+            continue;
+        }
+        if show_steps && several && i > 0 {
+            println!("\x1b[2m$ {}\x1b[0m", l.display);
+        }
+        l.command.current_dir(&fg.cwd);
+        let status = match &mut captured {
+            Some(out) => l.command.stderr(Stdio::inherit()).output().map(|o| {
+                out.push_str(&String::from_utf8_lossy(&o.stdout));
+                o.status
+            }),
+            None => l.command.status(),
+        };
+        match status {
+            Ok(s) if s.success() => last = Some(s),
+            other => return (other.map(Some), captured),
+        }
+    }
+    // None: every step was skipped, which counts as success.
+    (Ok(last), captured)
 }

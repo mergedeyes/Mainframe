@@ -15,7 +15,15 @@ use super::{ACCENT, DIM, footer::draw_completions, pane, popup};
 pub(super) fn draw_form(f: &mut Frame, form: &Form, area: Rect) {
     // One line per step; long ones wrap.
     let (steps, verb, heading, leads) = match &form.kind {
-        FormKind::GhRepoCreate => (vec![crate::git::gh_repo_create_cmd(form)], "create", "command", ("  $  ", "  && ")),
+        FormKind::GhRepoCreate => {
+            let steps = match crate::git::gh_repo_create_cmd(form) {
+                crate::cmd::Cmd::Steps(steps) => {
+                    steps.iter().map(|s| s.display(&crate::shell::Shell::default())).collect()
+                }
+                other => vec![other.display(&crate::shell::Shell::default())],
+            };
+            (steps, "create", "command", ("  $  ", "  && "))
+        }
         FormKind::Release(ctx) => (crate::release::steps(form, ctx), "release", "command", ("  $  ", "  && ")),
         FormKind::Deploy { root, keep_build, .. } => (
             crate::app::deploy_from_form(form).summary(root, *keep_build),

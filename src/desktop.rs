@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::config::home;
+use crate::{config::home, platform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -67,7 +67,7 @@ fn plan(root: &Path, src: &Path, text: &str, bin: &str, bin_dest: &Path) -> Desk
 
     let meta = fs::symlink_metadata(&target).ok();
     let symlink = meta.as_ref().is_some_and(|m| m.file_type().is_symlink());
-    let linked = symlink && fs::canonicalize(&target).ok() == fs::canonicalize(src).ok();
+    let linked = symlink && platform::canonicalize(&target).ok() == platform::canonicalize(src).ok();
     let old = meta.and_then(|_| fs::read_to_string(&target).ok());
     let status = match &old {
         _ if linked => Status::Linked,

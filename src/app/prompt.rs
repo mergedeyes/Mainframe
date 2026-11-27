@@ -9,11 +9,11 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{App, Level, Mode, PromptKind, files::move_path};
 use crate::{
+    cmd::{Cmd, Step},
     complete::{self, Completer},
     config, git,
-    git::GIT,
     line::{Edit, LineEdit},
-    project::{Plan, quote_str},
+    project::Plan,
 };
 
 impl App {
@@ -126,11 +126,11 @@ impl App {
             }
             PromptKind::Command => {
                 self.history.add(&input);
-                self.start_task(input.clone(), Plan { cmd: input, cwd });
+                self.start_task(input.clone(), Plan { cmd: Cmd::Shell(input), cwd });
             }
             PromptKind::Commit { all } => {
-                let add = if all { format!("{GIT} add -A && ") } else { String::new() };
-                let cmd = format!("{add}{GIT} commit -m {}", quote_str(&input));
+                let commit = Step::git().args(["commit", "-m", &input]);
+                let cmd = if all { Step::git().args(["add", "-A"]).then(commit) } else { commit.into() };
                 self.start_task("git commit".into(), Plan { cmd, cwd });
             }
             PromptKind::NewBranch => {
@@ -138,7 +138,7 @@ impl App {
                 if name.is_empty() {
                     return self.set_status(format!("no usable branch name in {input:?}"), Level::Err);
                 }
-                let cmd = format!("{GIT} switch -c {}", quote_str(&name));
+                let cmd = Step::git().args(["switch", "-c", &name]).into();
                 self.start_task(format!("git switch -c {name}"), Plan { cmd, cwd });
             }
             PromptKind::RemoveWorktree => self.confirm_remove_worktree(input.trim()),
@@ -182,7 +182,7 @@ impl App {
             PromptKind::Cd => {
                 let path = self.resolve(&input);
                 if path.is_dir() {
-                    self.browser.cd(path.canonicalize().unwrap_or(path));
+                    self.browser.cd(crate::platform::canonicalize(&path).unwrap_or(path));
                 } else if path.exists() {
                     let parent = path.parent().unwrap_or(Path::new("/")).to_path_buf();
                     self.browser.cd(parent);

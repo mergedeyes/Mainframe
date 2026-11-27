@@ -97,24 +97,21 @@ impl ProcessTree {
             libc::killpg(self.pgid, libc::SIGTERM);
         }
     }
+
+    /// Stops the group, and the program at its top for sure, even if it ignores SIGTERM.
+    pub fn kill(&self) {
+        self.terminate();
+        // SAFETY: plain syscall on a pid we started.
+        unsafe {
+            libc::kill(self.pgid, libc::SIGKILL);
+        }
+    }
 }
 
 /// Keeps a program (an editor, a notification) running on its own, apart from Mainframe's
 /// process group.
 pub fn detach(command: &mut Command) {
     command.process_group(0);
-}
-
-/// A command line typed by the user (or written in the config), run by `sh`.
-pub fn shell(cmd: &str) -> Command {
-    let mut c = Command::new("sh");
-    c.arg("-c").arg(cmd);
-    c
-}
-
-/// The command that opens the user's own shell in the terminal: `$SHELL`.
-pub fn interactive_shell() -> String {
-    crate::project::quote_str(&std::env::var("SHELL").unwrap_or_else(|_| "sh".into()))
 }
 
 /// Opens a file in its default application.

@@ -33,7 +33,7 @@ use windows_sys::Win32::{
     },
 };
 
-use super::{DiskUse, home, which};
+use super::{DiskUse, home};
 
 /// `%APPDATA%` (roams with the profile) or `%LOCALAPPDATA%` (stays on this machine).
 fn known(var: &str, fallback: &str) -> PathBuf {
@@ -149,6 +149,10 @@ impl ProcessTree {
             unsafe { TerminateJobObject(self.job, 1) };
         }
     }
+
+    pub fn kill(&self) {
+        self.terminate();
+    }
 }
 
 impl Drop for ProcessTree {
@@ -164,53 +168,6 @@ impl Drop for ProcessTree {
 /// window popping up for it.
 pub fn detach(command: &mut Command) {
     command.creation_flags(BACKGROUND);
-}
-
-/// PowerShell 7 (`pwsh`) when it's installed, else the Windows PowerShell every Windows has.
-fn powershell() -> &'static Path {
-    static EXE: OnceLock<PathBuf> = OnceLock::new();
-    EXE.get_or_init(|| which("pwsh").unwrap_or_else(|| "powershell.exe".into()))
-}
-
-/// Set before the command: no progress bars in the output, UTF-8 for what PowerShell itself
-/// prints, colors kept although the output goes to a pipe (pwsh 7.2+).
-const PRELUDE: &str = "$ProgressPreference = 'SilentlyContinue'\n\
-    try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch {}\n\
-    if ($PSStyle) { $PSStyle.OutputRendering = 'Ansi' }\n";
-
-/// PowerShell's own exit code is only 0 or 1; this passes on the program's real one.
-const EPILOGUE: &str = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE } else { exit 1 } }";
-
-/// A command line typed by the user (or written in the config), run by PowerShell. It goes
-/// in as `-EncodedCommand`, so no quote in it can be mangled on the way.
-pub fn shell(cmd: &str) -> Command {
-    let script = format!("{PRELUDE}{cmd}{EPILOGUE}");
-    let mut c = Command::new(powershell());
-    // Bypass applies to this process only; without it `.\build.ps1` is refused on a
-    // default Windows install.
-    c.args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand"]).arg(encode_command(&script));
-    c
-}
-
-/// Base64 of the UTF-16LE text, as `-EncodedCommand` wants it.
-fn encode_command(script: &str) -> String {
-    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
-        for i in 0..4 {
-            out.push(if i <= chunk.len() { ABC[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
-        }
-    }
-    out
-}
-
-/// The command that opens a shell in the terminal: PowerShell, as `shell` runs. Started by
-/// name, so it's the same one the user gets from the Start menu.
-pub fn interactive_shell() -> String {
-    let name = if which("pwsh").is_some() { "pwsh" } else { "powershell" };
-    format!("{name} -NoLogo")
 }
 
 fn wide(s: &OsStr) -> Vec<u16> {
@@ -303,14 +260,7 @@ pub(super) fn disk_use(path: &Path, meta: &Metadata) -> DiskUse {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn encoded_command_is_base64_of_utf16le() {
-        // "ab" → 61 00 62 00
-        assert_eq!(encode_command("ab"), "YQBiAA==");
-        assert_eq!(encode_command("abc"), "YQBiAGMA");
-        assert_eq!(encode_command(""), "");
-    }
+    use crate::platform::which;
 
     #[test]
     fn program_names_drop_their_extension() {
@@ -322,14 +272,5 @@ mod tests {
     #[test]
     fn which_finds_programs_without_their_extension() {
         assert!(which("cmd").is_some_and(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"))));
-    }
-
-    #[test]
-    fn shell_passes_exit_codes_and_quotes_through() {
-        let out = shell("Write-Output 'it''s \"here\"'").output().unwrap();
-        assert!(out.status.success());
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "it's \"here\"");
-        let status = shell("cmd /c exit 7").status().unwrap();
-        assert_eq!(status.code(), Some(7));
     }
 }

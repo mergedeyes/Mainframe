@@ -5,7 +5,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{browser::Entry, config::Config, targets};
+use crate::{
+    browser::Entry,
+    cmd::{Cmd, Step},
+    config::Config,
+    platform, targets,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -62,10 +67,10 @@ impl Op {
     }
 }
 
-/// A shell command ready to execute.
+/// A command and where it runs.
 #[derive(Debug, Clone)]
 pub struct Plan {
-    pub cmd: String,
+    pub cmd: Cmd,
     pub cwd: PathBuf,
 }
 
@@ -146,48 +151,49 @@ pub fn plan(op: Op, target: Option<&Entry>, cwd: &Path, cfg: &Config) -> Result<
     if p.kind == Kind::Python {
         return targets::python_plan(op, &p.root).map(|cmd| Plan { cmd, cwd: p.root.clone() });
     }
+    let w = Cmd::words;
     let cmd = match (p.kind, op) {
-        (Kind::Cargo, Op::Run) => "cargo run",
-        (Kind::Cargo, Op::Build) => "cargo build",
-        (Kind::Cargo, Op::Release) => "cargo build --release",
-        (Kind::Cargo, Op::Test) => "cargo test",
-        (Kind::Go, Op::Run) => "go run .",
-        (Kind::Go, Op::Build | Op::Release) => "go build ./...",
-        (Kind::Go, Op::Test) => "go test ./...",
-        (Kind::Npm, Op::Run) => "npm start",
-        (Kind::Npm, Op::Build | Op::Release) => "npm run build",
-        (Kind::Npm, Op::Test) => "npm test",
-        (Kind::Make, Op::Run) => "make run",
-        (Kind::Make, Op::Build | Op::Release) => "make",
-        (Kind::Make, Op::Test) => "make test",
-        (Kind::Zig, Op::Run) => "zig build run",
-        (Kind::Zig, Op::Build) => "zig build",
-        (Kind::Zig, Op::Release) => "zig build -Doptimize=ReleaseFast",
-        (Kind::Zig, Op::Test) => "zig build test",
+        (Kind::Cargo, Op::Run) => w("cargo run"),
+        (Kind::Cargo, Op::Build) => w("cargo build"),
+        (Kind::Cargo, Op::Release) => w("cargo build --release"),
+        (Kind::Cargo, Op::Test) => w("cargo test"),
+        (Kind::Go, Op::Run) => w("go run ."),
+        (Kind::Go, Op::Build | Op::Release) => w("go build ./..."),
+        (Kind::Go, Op::Test) => w("go test ./..."),
+        (Kind::Npm, Op::Run) => w("npm start"),
+        (Kind::Npm, Op::Build | Op::Release) => w("npm run build"),
+        (Kind::Npm, Op::Test) => w("npm test"),
+        (Kind::Make, Op::Run) => w("make run"),
+        (Kind::Make, Op::Build | Op::Release) => w("make"),
+        (Kind::Make, Op::Test) => w("make test"),
+        (Kind::Zig, Op::Run) => w("zig build run"),
+        (Kind::Zig, Op::Build) => w("zig build"),
+        (Kind::Zig, Op::Release) => w("zig build -Doptimize=ReleaseFast"),
+        (Kind::Zig, Op::Test) => w("zig build test"),
         (Kind::CMake, Op::Run) => return Err("cmake doesn't say what to run — T lists its tasks".into()),
-        (Kind::CMake, Op::Build) => "cmake -S . -B build && cmake --build build",
+        (Kind::CMake, Op::Build) => w("cmake -S . -B build").then(Step::words("cmake --build build")),
         (Kind::CMake, Op::Release) => {
-            "cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release"
+            w("cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release").then(Step::words("cmake --build build-release"))
         }
-        (Kind::CMake, Op::Test) => "ctest --test-dir build --output-on-failure",
+        (Kind::CMake, Op::Test) => w("ctest --test-dir build --output-on-failure"),
         (Kind::Meson, Op::Run) => return Err("meson doesn't say what to run — T lists its tasks".into()),
-        (Kind::Meson, Op::Build) => "{ [ -d build ] || meson setup build; } && meson compile -C build",
-        (Kind::Meson, Op::Release) => {
-            "{ [ -d build-release ] || meson setup build-release --buildtype=release; } && meson compile -C build-release"
+        (Kind::Meson, Op::Build) => {
+            Step::words("meson setup build").unless_exists("build").then(Step::words("meson compile -C build"))
         }
-        (Kind::Meson, Op::Test) => "meson test -C build",
-        (Kind::Just, Op::Run) => "just",
-        (Kind::Just, Op::Build | Op::Release) => "just build",
-        (Kind::Just, Op::Test) => "just test",
+        (Kind::Meson, Op::Release) => Step::words("meson setup build-release --buildtype=release")
+            .unless_exists("build-release")
+            .then(Step::words("meson compile -C build-release")),
+        (Kind::Meson, Op::Test) => w("meson test -C build"),
+        (Kind::Just, Op::Run) => w("just"),
+        (Kind::Just, Op::Build | Op::Release) => w("just build"),
+        (Kind::Just, Op::Test) => w("just test"),
         (Kind::Python, _) => unreachable!(),
     };
-    Ok(Plan { cmd: cmd.into(), cwd: p.root })
+    Ok(Plan { cmd, cwd: p.root })
 }
 
 fn file_plan(op: Op, f: &Entry, project: Option<&Project>, cfg: &Config) -> Option<Plan> {
     let dir = f.path.parent().unwrap_or(Path::new("/")).to_path_buf();
-    // Commands run from the file's own directory, so the bare name is enough.
-    let q = quote_str(&f.name);
     let ext = f.path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
 
     if op != Op::Run {
@@ -198,58 +204,107 @@ fn file_plan(op: Op, f: &Entry, project: Option<&Project>, cfg: &Config) -> Opti
     if let Some(p) = project.filter(|p| p.kind == Kind::Cargo && ext == "rs") {
         let stem = f.path.file_stem()?.to_string_lossy();
         let parent = f.path.parent()?;
-        let target = if parent == p.root.join("src/bin") {
-            format!(" --bin {}", quote_str(&stem))
+        let mut run = Step::words("cargo run");
+        if parent == p.root.join("src").join("bin") {
+            run = run.args(["--bin", &stem]);
         } else if parent == p.root.join("examples") {
-            format!(" --example {}", quote_str(&stem))
-        } else {
-            String::new()
-        };
-        return Some(Plan { cmd: format!("cargo run{target}"), cwd: p.root.clone() });
+            run = run.args(["--example", &stem]);
+        }
+        return Some(Plan { cmd: run.into(), cwd: p.root.clone() });
     }
 
     if let Some(tpl) = cfg.runners.get(&ext) {
-        return Some(Plan { cmd: expand_file(tpl, f), cwd: dir });
+        return Some(Plan { cmd: Cmd::Shell(expand_file(tpl, f, &cfg.shell())), cwd: dir });
     }
 
-    let tmp = env::temp_dir().join(format!("mainframe-{}", f.path.file_stem()?.to_string_lossy()));
-    let tmp = quote(&tmp);
-    let cmd = match ext.as_str() {
-        "sh" | "bash" => format!("bash {q}"),
-        "zsh" => format!("zsh {q}"),
-        "fish" => format!("fish {q}"),
-        "py" => format!("python3 {q}"),
-        "js" | "mjs" | "cjs" => format!("node {q}"),
-        "ts" => format!("npx --yes tsx {q}"),
-        "rb" => format!("ruby {q}"),
-        "lua" => format!("lua {q}"),
-        "pl" => format!("perl {q}"),
-        "php" => format!("php {q}"),
-        "go" => format!("go run {q}"),
-        "rs" => format!("rustc --edition 2024 -o {tmp} {q} && {tmp}"),
-        "c" => format!("cc -Wall -o {tmp} {q} && {tmp}"),
-        "cpp" | "cc" | "cxx" => format!("c++ -Wall -o {tmp} {q} && {tmp}"),
-        _ if f.is_exec => format!("./{q}"),
+    // Commands run from the file's own directory, so the bare name is enough.
+    let name = f.name.as_str();
+    let exe =
+        env::temp_dir().join(format!("mainframe-{}{}", f.path.file_stem()?.to_string_lossy(), env::consts::EXE_SUFFIX));
+    let exe_s = exe.to_string_lossy().into_owned();
+    let cmd: Cmd = match ext.as_str() {
+        "sh" | "bash" => Step::new(bash()).arg(name).into(),
+        "zsh" | "fish" => Step::new(ext.as_str()).arg(name).into(),
+        "ps1" => powershell_file(name).into(),
+        "py" => python().arg(name).into(),
+        "js" | "mjs" | "cjs" => Step::new("node").arg(name).into(),
+        "ts" => Step::words("npx --yes tsx").arg(name).into(),
+        "rb" => Step::new("ruby").arg(name).into(),
+        "lua" => Step::new("lua").arg(name).into(),
+        "pl" => Step::new("perl").arg(name).into(),
+        "php" => Step::new("php").arg(name).into(),
+        "go" => Step::words("go run").arg(name).into(),
+        "rs" => Step::words("rustc --edition 2024 -o").args([&exe_s, name]).then(Step::new(&exe_s)),
+        "c" => compile_c(false, name, &exe).then(Step::new(&exe_s)),
+        "cpp" | "cc" | "cxx" => compile_c(true, name, &exe).then(Step::new(&exe_s)),
+        _ if f.is_exec && cfg!(windows) => Step::new(f.path.to_string_lossy()).into(),
+        _ if f.is_exec => Step::new(format!("./{name}")).into(),
         _ => return None,
     };
     Some(Plan { cmd, cwd: dir })
 }
 
-fn expand_file(tpl: &str, f: &Entry) -> String {
-    tpl.replace("{file}", &quote(&f.path)).replace("{name}", &quote_str(&f.name))
+/// Python 3: `python3` on Unix; on Windows the `py` launcher when it's there (`python3` there
+/// may be the Store's placeholder that opens the Store).
+pub fn python() -> Step {
+    if !cfg!(windows) {
+        Step::new("python3")
+    } else if platform::which("py").is_some() {
+        Step::new("py").arg("-3")
+    } else {
+        Step::new("python")
+    }
+}
+
+/// On Windows, Git's bash: the `bash` on PATH there is often WSL's.
+fn bash() -> String {
+    platform::git_sh("bash").map_or_else(|| "bash".into(), |p| p.to_string_lossy().into_owned())
+}
+
+fn powershell_file(name: &str) -> Step {
+    let ps = if platform::which("pwsh").is_some() { "pwsh" } else { "powershell" };
+    let step = Step::new(ps).args(["-NoLogo", "-NoProfile"]);
+    let step = if cfg!(windows) { step.args(["-ExecutionPolicy", "Bypass"]) } else { step };
+    step.args(["-File", name])
+}
+
+/// Compiles one C or C++ file to `exe`. On Windows: cl when a developer prompt put it on
+/// PATH, else clang, else gcc (MinGW), else cl anyway.
+fn compile_c(cpp: bool, name: &str, exe: &Path) -> Step {
+    let exe_s = exe.to_string_lossy();
+    let unix = |cc: &str| Step::new(cc).args(["-Wall", "-o", &exe_s, name]);
+    if !cfg!(windows) {
+        return unix(if cpp { "c++" } else { "cc" });
+    }
+    let has = |p: &str| platform::which(p).is_some();
+    if !has("cl") {
+        let (clang, gcc) = if cpp { ("clang++", "g++") } else { ("clang", "gcc") };
+        if has(clang) {
+            return unix(clang);
+        }
+        if has(gcc) {
+            return unix(gcc);
+        }
+    }
+    // /Fo keeps the .obj out of the source folder.
+    let obj_dir = format!("{}{}", exe.parent().unwrap_or(Path::new(".")).display(), std::path::MAIN_SEPARATOR);
+    let step = Step::words("cl /nologo /W4");
+    let step = if cpp { step.arg("/EHsc") } else { step };
+    step.arg(format!("/Fe:{exe_s}")).arg(format!("/Fo:{obj_dir}")).arg(name)
+}
+
+fn expand_file(tpl: &str, f: &Entry, shell: &crate::shell::Shell) -> String {
+    tpl.replace("{file}", &shell.quote_path(&f.path)).replace("{name}", &shell.quote(&f.name))
 }
 
 pub fn quote(p: &Path) -> String {
     quote_str(&p.to_string_lossy())
 }
 
-/// POSIX single-quote escaping, skipped when the string is obviously safe.
+/// POSIX quoting, for Mainframe's own sh scripts (`Cmd::Sh`). What the user's shell runs
+/// is quoted by `Shell::quote`.
 pub fn quote_str(s: &str) -> String {
-    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+=:,@%".contains(c)) {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', r"'\''"))
-    }
+    crate::shell::posix_quote(s)
 }
 
 pub use crate::platform::which;

@@ -19,7 +19,7 @@ use ratatui::{
 use serde::{Deserialize, Serialize};
 
 use super::{App, Focus, Tab, tasks::LastRun};
-use crate::{ansi, config, project::Plan, task::Output};
+use crate::{ansi, cmd::Cmd, config, project::Plan, task::Output};
 
 /// Per tab, the newest lines kept on disk; enough to see what happened, small to save.
 const SAVED_LINES: usize = 5000;
@@ -155,13 +155,30 @@ struct Saved {
     tabs: Vec<SavedTab>,
 }
 
+/// Before commands were steps they were sh command lines; those still load, as sh.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum SavedCmd {
+    Cmd(Cmd),
+    Sh(String),
+}
+
+impl From<SavedCmd> for Cmd {
+    fn from(c: SavedCmd) -> Self {
+        match c {
+            SavedCmd::Cmd(c) => c,
+            SavedCmd::Sh(line) => Cmd::Sh(line),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct SavedTab {
     label: String,
     /// Where it ran: relative `file:line`s in the output start here.
     cwd: PathBuf,
     /// What ran, so `@` reruns it.
-    cmd: Option<String>,
+    cmd: Option<SavedCmd>,
     last_run: Option<(bool, String)>,
     scroll: usize,
     /// With SGR color codes, as `ansi::parse_line` reads them.
@@ -191,7 +208,7 @@ fn save(root: &Path, tabs: &[Tab], tab: usize, show_output: bool, zoom_output: b
                 SavedTab {
                     label: t.label.clone(),
                     cwd: t.plan.as_ref().map_or_else(|| t.output.cwd().to_path_buf(), |p| p.cwd.clone()),
-                    cmd: t.plan.as_ref().map(|p| p.cmd.clone()),
+                    cmd: t.plan.as_ref().map(|p| SavedCmd::Cmd(p.cmd.clone())),
                     last_run: t.last_run.as_ref().map(|l| (l.ok, l.detail.clone())),
                     scroll: t.output.scroll,
                     lines: t.output.lines[skip..].iter().map(ansi::encode_line).collect(),
@@ -228,7 +245,7 @@ fn load(root: &Path) -> Option<Workspace> {
             output.scroll = t.scroll.min(output.lines.len());
             Tab {
                 last_run: t.last_run.map(|(ok, detail)| LastRun { label: t.label.clone(), ok, detail }),
-                plan: t.cmd.map(|cmd| Plan { cmd, cwd: t.cwd }),
+                plan: t.cmd.map(|cmd| Plan { cmd: cmd.into(), cwd: t.cwd }),
                 label: t.label,
                 output,
                 task: None,

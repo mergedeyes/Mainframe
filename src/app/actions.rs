@@ -10,9 +10,10 @@ use std::{
 use super::{App, Foreground, Level};
 use crate::{
     browser,
+    cmd::{Cmd, Step},
     config::{self, Action, Config},
     locate, platform, proc,
-    project::{self, Op, Plan, quote, quote_str},
+    project::{self, Op, Plan},
 };
 
 impl App {
@@ -62,12 +63,16 @@ impl App {
                 return false;
             }
         }
-        self.in_terminal(format!("{} {}", self.config.editor, quote(path)));
+        let Some(editor) = Step::from_setting(&self.config.editor) else {
+            self.set_status("no editor set — editor = … in the config", Level::Err);
+            return false;
+        };
+        self.in_terminal(editor.path(path).into());
         true
     }
 
     /// Hands the terminal to `cmd` and comes back as soon as it exits.
-    pub(super) fn in_terminal(&mut self, cmd: String) {
+    pub(super) fn in_terminal(&mut self, cmd: Cmd) {
         self.pending = Some(Foreground {
             cmd,
             cwd: self.browser.cwd.clone(),
@@ -81,10 +86,10 @@ impl App {
     pub(super) fn open_loc(&mut self, vscode: bool) -> bool {
         let Some((_, loc)) = self.tab().output.selected_loc().cloned() else { return false };
         if vscode {
-            self.spawn_detached(&locate::editor_cmd(&self.config.vscode, &loc));
+            self.spawn_detached(locate::editor_cmd(&self.config.vscode, &loc));
             self.set_status(format!("opened {}:{} in VS Code", config::pretty_path(&loc.path), loc.line), Level::Ok);
         } else {
-            self.in_terminal(locate::editor_cmd(&self.config.editor, &loc));
+            self.in_terminal(locate::editor_cmd(&self.config.editor, &loc).into());
         }
         true
     }
@@ -106,18 +111,18 @@ impl App {
                 None => return,
             }
         };
-        self.spawn_detached(&format!("{} {}", self.config.vscode, quote(&target)));
+        self.spawn_detached(vscode(&self.config.vscode).path(&target));
         self.set_status(format!("opened {} in VS Code", config::pretty_path(&target)), Level::Ok);
     }
 
     pub(super) fn open_shell(&mut self) {
-        self.in_terminal(platform::interactive_shell());
+        self.in_terminal(self.config.shell().interactive().into());
     }
 
     pub(super) fn run_op(&mut self, op: Op, interactive: bool) {
         match project::plan(op, self.browser.selected(), &self.browser.cwd, &self.config) {
             Ok(plan) if interactive => self.foreground(plan, true),
-            Ok(plan) => self.start_task(plan.cmd.clone(), plan),
+            Ok(plan) => self.start_task(plan.cmd.display(&self.config.shell()), plan),
             Err(msg) => self.set_status(msg, Level::Err),
         }
     }
@@ -133,13 +138,14 @@ impl App {
         let file = sel.map_or_else(|| cwd.clone(), |e| e.path.clone());
         let name = sel.map_or_else(String::new, |e| e.name.clone());
         let root = self.project.as_ref().map_or_else(|| cwd.clone(), |p| p.root.clone());
-        let cmd = action
+        let shell = self.config.shell();
+        let line = action
             .cmd
-            .replace("{file}", &quote(&file))
-            .replace("{name}", &quote_str(&name))
-            .replace("{dir}", &quote(cwd))
-            .replace("{root}", &quote(&root));
-        let plan = Plan { cmd, cwd: cwd.clone() };
+            .replace("{file}", &shell.quote_path(&file))
+            .replace("{name}", &shell.quote(&name))
+            .replace("{dir}", &shell.quote_path(cwd))
+            .replace("{root}", &shell.quote_path(&root));
+        let plan = Plan { cmd: Cmd::Shell(line), cwd: cwd.clone() };
         if action.interactive {
             self.foreground(plan, true);
         } else {
@@ -147,8 +153,9 @@ impl App {
         }
     }
 
-    pub(super) fn spawn_detached(&mut self, cmd: &str) {
-        let mut command = platform::shell(cmd);
+    /// Starts a program (VS Code, a notification) on its own and doesn't wait for it.
+    pub(super) fn spawn_detached(&mut self, step: Step) {
+        let mut command = step.command();
         command.current_dir(&self.browser.cwd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         platform::detach(&mut command);
         let spawned = command.spawn();
@@ -210,11 +217,16 @@ impl App {
             return;
         }
         self.pending = Some(Foreground {
-            cmd: "zoxide query --interactive".into(),
+            cmd: Cmd::words("zoxide query --interactive"),
             cwd: self.browser.cwd.clone(),
             wait: false,
             then_reload_config: false,
             cd_to_output: true,
         });
     }
+}
+
+/// The `vscode` setting as a program and its arguments; `code` if it's empty.
+pub(super) fn vscode(setting: &str) -> Step {
+    Step::from_setting(setting).unwrap_or_else(|| Step::new("code"))
 }

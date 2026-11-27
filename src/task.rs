@@ -3,8 +3,12 @@
 use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::{Child, ExitStatus, Stdio},
-    sync::mpsc::{self, Receiver, TryRecvError},
+    process::{ExitStatus, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender, TryRecvError},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -13,24 +17,134 @@ use ratatui::text::Line;
 
 use crate::{
     ansi,
+    cmd::{Cmd, Launch},
     locate::{self, Loc},
-    platform::{self, ProcessTree},
+    platform::ProcessTree,
+    shell::Shell,
 };
 
 const MAX_LINES: usize = 20_000;
 
+/// How a task ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Exit {
+    Code(i32),
+    /// Stopped by Mainframe, or by a signal.
+    Killed,
+    /// A program couldn't be started at all.
+    NotStarted,
+}
+
+impl Exit {
+    pub fn ok(&self) -> bool {
+        *self == Exit::Code(0)
+    }
+
+    pub fn describe(&self) -> String {
+        match self {
+            Exit::Code(c) => format!("exit {c}"),
+            Exit::Killed => "killed".into(),
+            Exit::NotStarted => "didn't start".into(),
+        }
+    }
+}
+
+enum Msg {
+    Line(String),
+    Done(Exit),
+}
+
+/// Shared with the thread that runs the steps, so a kill reaches whichever one is running.
+#[derive(Default)]
+struct Control {
+    stopped: AtomicBool,
+    running: Mutex<Option<ProcessTree>>,
+}
+
 pub struct Task {
     pub label: String,
-    child: Child,
-    tree: ProcessTree,
-    rx: Receiver<String>,
+    rx: Receiver<Msg>,
+    control: Arc<Control>,
     pub started: Instant,
-    readers_done: bool,
+    finished: bool,
 }
 
 impl Task {
-    pub fn spawn(label: String, cmd: &str, cwd: &Path) -> std::io::Result<Self> {
-        let mut command = platform::shell(cmd);
+    pub fn spawn(label: String, cmd: &Cmd, cwd: &Path, shell: &Shell) -> std::io::Result<Self> {
+        let launches = cmd.launches(shell)?;
+        let (tx, rx) = mpsc::channel();
+        let control = Arc::new(Control::default());
+        let ctl = control.clone();
+        let cwd = cwd.to_path_buf();
+        thread::Builder::new().name(format!("task {label}")).spawn(move || {
+            let exit = run(launches, &cwd, &tx, &ctl);
+            let _ = tx.send(Msg::Done(exit));
+        })?;
+        Ok(Self { label, rx, control, started: Instant::now(), finished: false })
+    }
+
+    /// Moves new output into `out` and reports completion once the last program has
+    /// exited *and* all of its output has been read.
+    pub fn poll(&mut self, out: &mut Output) -> Option<(Exit, Duration)> {
+        if self.finished {
+            return None;
+        }
+        loop {
+            match self.rx.try_recv() {
+                Ok(Msg::Line(line)) => out.push(ansi::parse_line(&line)),
+                Ok(Msg::Done(exit)) => {
+                    self.finished = true;
+                    return Some((exit, self.started.elapsed()));
+                }
+                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Disconnected) => {
+                    self.finished = true;
+                    return Some((Exit::NotStarted, self.started.elapsed()));
+                }
+            }
+        }
+    }
+
+    /// Asks the running program and everything it started to stop, without waiting for it.
+    pub fn signal(&self) {
+        self.control.stopped.store(true, Ordering::SeqCst);
+        if let Some(tree) = &*self.control.running.lock().unwrap_or_else(|e| e.into_inner()) {
+            tree.terminate();
+        }
+    }
+
+    pub fn kill(&mut self) {
+        self.control.stopped.store(true, Ordering::SeqCst);
+        if let Some(tree) = &*self.control.running.lock().unwrap_or_else(|e| e.into_inner()) {
+            tree.kill();
+        }
+    }
+}
+
+impl Drop for Task {
+    /// A task replaced while still running (rerun, watch mode) is killed; its thread reaps it.
+    fn drop(&mut self) {
+        if !self.finished {
+            self.kill();
+        }
+    }
+}
+
+/// Runs the programs in order on the task's thread, stopping at the first that fails.
+fn run(launches: Vec<Launch>, cwd: &Path, tx: &Sender<Msg>, control: &Control) -> Exit {
+    let several = launches.len() > 1;
+    let mut first = true;
+    for Launch { mut command, display, unless_exists } in launches {
+        if control.stopped.load(Ordering::SeqCst) {
+            return Exit::Killed;
+        }
+        if unless_exists.is_some_and(|p| cwd.join(p).exists()) {
+            continue;
+        }
+        if several && !first {
+            let _ = tx.send(Msg::Line(format!("\x1b[2m$ {display}\x1b[0m")));
+        }
+        first = false;
         command
             .current_dir(cwd)
             .stdin(Stdio::null())
@@ -45,69 +159,61 @@ impl Task {
         // for it), and grouped so stopping it takes grandchildren like the binary under
         // `cargo run` along.
         ProcessTree::prepare(&mut command);
-        let mut child = command.spawn()?;
-        let tree = ProcessTree::attach(&child);
-
-        let (tx, rx) = mpsc::channel();
+        let mut child = match command.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                let program = command.get_program().to_string_lossy().into_owned();
+                let _ = tx.send(Msg::Line(format!("\x1b[31mcouldn't start {program}: {e}\x1b[0m")));
+                return Exit::NotStarted;
+            }
+        };
+        {
+            let mut running = control.running.lock().unwrap_or_else(|e| e.into_inner());
+            let tree = ProcessTree::attach(&child);
+            // A kill that came while it was starting.
+            if control.stopped.load(Ordering::SeqCst) {
+                tree.kill();
+            }
+            *running = Some(tree);
+        }
         let out = child.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send>);
         let err = child.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send>);
-        for stream in [out, err].into_iter().flatten() {
-            let tx = tx.clone();
-            thread::spawn(move || {
-                for chunk in BufReader::new(stream).split(b'\n') {
-                    let Ok(bytes) = chunk else { break };
-                    if tx.send(String::from_utf8_lossy(&bytes).into_owned()).is_err() {
-                        break;
+        let readers: Vec<_> = [out, err]
+            .into_iter()
+            .flatten()
+            .map(|stream| {
+                let tx = tx.clone();
+                thread::spawn(move || {
+                    for chunk in BufReader::new(stream).split(b'\n') {
+                        let Ok(mut bytes) = chunk else { break };
+                        if bytes.last() == Some(&b'\r') {
+                            bytes.pop();
+                        }
+                        if tx.send(Msg::Line(String::from_utf8_lossy(&bytes).into_owned())).is_err() {
+                            break;
+                        }
                     }
-                }
-            });
+                })
+            })
+            .collect();
+        for r in readers {
+            let _ = r.join();
         }
-
-        Ok(Self { label, child, tree, rx, started: Instant::now(), readers_done: false })
-    }
-
-    /// Moves new output into `out` and reports completion once the process has
-    /// exited *and* all of its output has been read.
-    pub fn poll(&mut self, out: &mut Output) -> Option<(ExitStatus, Duration)> {
-        loop {
-            match self.rx.try_recv() {
-                Ok(line) => out.push(ansi::parse_line(&line)),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.readers_done = true;
-                    break;
-                }
-            }
-        }
-        if !self.readers_done {
-            return None;
-        }
-        match self.child.try_wait() {
-            Ok(Some(status)) => Some((status, self.started.elapsed())),
-            _ => None,
+        let status = child.wait();
+        control.running.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let stopped = control.stopped.load(Ordering::SeqCst);
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(_) if stopped => return Exit::Killed,
+            Ok(s) => return exit_of(s),
+            Err(_) => return Exit::Killed,
         }
     }
-
-    /// Asks the task and everything it started to stop, without waiting for it.
-    pub fn signal(&self) {
-        self.tree.terminate();
-    }
-
-    pub fn kill(&mut self) {
-        self.tree.terminate();
-        let _ = self.child.kill();
-    }
+    Exit::Code(0)
 }
 
-impl Drop for Task {
-    /// A task replaced while still running (rerun, watch mode) is killed and reaped,
-    /// so it doesn't linger as a zombie.
-    fn drop(&mut self) {
-        if let Ok(None) = self.child.try_wait() {
-            self.kill();
-            let _ = self.child.wait();
-        }
-    }
+fn exit_of(status: ExitStatus) -> Exit {
+    status.code().map_or(Exit::Killed, Exit::Code)
 }
 
 #[derive(Default)]
@@ -262,5 +368,87 @@ impl Output {
 
     pub fn scroll_to_top(&mut self) {
         self.scroll = self.max_scroll();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{cmd::Step, testutil::temp_dir};
+
+    /// Polls until the task ends; the plain text of its output, and how it ended.
+    fn finish(cmd: Cmd, cwd: &Path) -> (Vec<String>, Exit) {
+        let mut task = Task::spawn("t".into(), &cmd, cwd, &Shell::default()).unwrap();
+        let mut out = Output::new(cwd);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some((exit, _)) = task.poll(&mut out) {
+                return (out.lines.iter().map(plain).collect(), exit);
+            }
+            assert!(Instant::now() < deadline, "task didn't finish");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn steps_run_in_order_and_stop_at_the_first_failure() {
+        let dir = temp_dir("task-steps");
+        let cmd = Cmd::Steps(vec![
+            Step::words("git --version"),
+            Step::words("git no-such-command"),
+            Step::words("git --version"),
+        ]);
+        let (lines, exit) = finish(cmd, &dir);
+        assert_eq!(exit, Exit::Code(1));
+        assert!(lines[0].starts_with("git version"), "{lines:?}");
+        assert_eq!(lines.iter().filter(|l| l.starts_with("git version")).count(), 1, "{lines:?}");
+        assert!(lines.iter().any(|l| l == "$ git no-such-command"), "{lines:?}");
+    }
+
+    #[test]
+    fn steps_are_skipped_when_their_folder_exists() {
+        let dir = temp_dir("task-skip");
+        std::fs::create_dir(dir.join("build")).unwrap();
+        let cmd = Step::words("git no-such-command").unless_exists("build").then(Step::words("git --version"));
+        let (lines, exit) = finish(cmd, &dir);
+        assert!(exit.ok(), "{lines:?}");
+        assert!(lines.iter().all(|l| !l.contains("no-such-command")), "{lines:?}");
+    }
+
+    #[test]
+    fn a_missing_program_says_so() {
+        let dir = temp_dir("task-missing");
+        let (lines, exit) = finish(Step::new("mainframe-no-such-program").into(), &dir);
+        assert_eq!(exit, Exit::NotStarted);
+        assert!(lines.iter().any(|l| l.starts_with("couldn't start mainframe-no-such-program")), "{lines:?}");
+    }
+
+    #[test]
+    fn shell_lines_run_in_the_shell() {
+        let dir = temp_dir("task-shell");
+        let (lines, exit) = finish(Cmd::Shell("git --version".into()), &dir);
+        assert!(exit.ok());
+        assert!(lines.iter().any(|l| l.starts_with("git version")), "{lines:?}");
+    }
+
+    #[test]
+    fn killing_stops_the_program_and_what_it_started() {
+        let dir = temp_dir("task-kill");
+        // A shell waiting on a child: both have to go for the task to end.
+        let line = if cfg!(windows) { "Start-Sleep 30; Write-Output done" } else { "sleep 30; echo done" };
+        let mut task = Task::spawn("t".into(), &Cmd::Shell(line.into()), &dir, &Shell::default()).unwrap();
+        let mut out = Output::new(&dir);
+        thread::sleep(Duration::from_millis(500));
+        let started = Instant::now();
+        task.kill();
+        let exit = loop {
+            if let Some((exit, _)) = task.poll(&mut out) {
+                break exit;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10), "kill didn't end the task");
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(exit, Exit::Killed);
+        assert!(out.lines.iter().all(|l| plain(l) != "done"));
     }
 }

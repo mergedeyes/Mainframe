@@ -13,7 +13,7 @@ pub const TEMPLATE: &str = r#"# Mainframe config
 #
 # Settings can go anywhere in this file, also below a [section]: Mainframe finds them.
 #
-# Placeholders usable in commands (all shell-quoted automatically):
+# Placeholders usable in commands (quoted for your shell automatically):
 #   {file}  selected entry (absolute path)
 #   {name}  selected entry's file name
 #   {dir}   directory you're currently in
@@ -24,6 +24,11 @@ editor = "nano"
 
 # Command used for `o` (file) and `O` (folder).
 vscode = "code"
+
+# The shell for commands you write: `:`, [runners] and [[actions]]. A name on PATH
+# or a path: sh, bash, zsh, fish, pwsh, powershell, cmd. Empty: sh, or PowerShell
+# on Windows. Mainframe runs its own builds, tests and git commands without one.
+shell = ""
 
 # Where `i` copies standalone executables to.
 install_dir = "~/.local/bin"
@@ -98,6 +103,7 @@ blog_repo = ""
 pub struct Config {
     pub editor: String,
     pub vscode: String,
+    pub shell: String,
     pub install_dir: String,
     pub projects_dir: String,
     pub show_hidden: bool,
@@ -117,6 +123,7 @@ impl Default for Config {
         Self {
             editor: "nano".into(),
             vscode: "code".into(),
+            shell: String::new(),
             install_dir: "~/.local/bin".into(),
             projects_dir: String::new(),
             show_hidden: true,
@@ -186,9 +193,10 @@ impl Config {
 /// The settings at the top of config.toml. TOML puts every key below a `[section]`
 /// header into that section, and a section can't be closed. None of these names means
 /// anything inside a section, so wherever one ends up, it's moved back to the top.
-const TOP_LEVEL: [&str; 12] = [
+const TOP_LEVEL: [&str; 13] = [
     "editor",
     "vscode",
+    "shell",
     "install_dir",
     "projects_dir",
     "show_hidden",
@@ -266,6 +274,11 @@ fn key_lines(text: &str, key: &str) -> Vec<usize> {
 }
 
 impl Config {
+    /// The shell the `shell` setting names.
+    pub fn shell(&self) -> crate::shell::Shell {
+        crate::shell::Shell::new(&self.shell)
+    }
+
     pub fn install_dir(&self) -> PathBuf {
         expand_tilde(&self.install_dir)
     }

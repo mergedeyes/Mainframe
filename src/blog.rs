@@ -59,16 +59,19 @@ pub fn root(cwd: &Path, setting: &str) -> Option<PathBuf> {
     if setting.is_empty() {
         return None;
     }
-    let blog = fs::canonicalize(config::expand_tilde(setting)).ok()?;
-    let cwd = fs::canonicalize(cwd).ok()?;
+    let blog = crate::platform::canonicalize(&config::expand_tilde(setting)).ok()?;
+    let cwd = crate::platform::canonicalize(cwd).ok()?;
     if cwd.starts_with(&blog) {
         return Some(blog);
     }
     // Another worktree shares the blog's git dir. Only when the blog folder is the repo's
     // top, so a blog inside, say, a dotfiles repo at $HOME doesn't claim all of $HOME.
-    let top = |d: &Path| git_text(d, &["rev-parse", "--show-toplevel"]).and_then(|t| fs::canonicalize(t).ok());
+    let top = |d: &Path| {
+        git_text(d, &["rev-parse", "--show-toplevel"]).and_then(|t| crate::platform::canonicalize(Path::new(&t)).ok())
+    };
     let common = |d: &Path| {
-        git_text(d, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).and_then(|t| fs::canonicalize(t).ok())
+        git_text(d, &["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            .and_then(|t| crate::platform::canonicalize(Path::new(&t)).ok())
     };
     let here = top(&cwd)?;
     (top(&blog)? == blog && common(&cwd)? == common(&blog)?).then_some(here)
@@ -442,8 +445,12 @@ fn move_to(root: &Path, from: &Path, to: &Path) -> Result<(), String> {
 }
 
 /// `path` relative to the blog, for messages.
+/// `path` inside the blog repo, with `/` like git and Jekyll write it, also on Windows.
 pub fn rel(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root).unwrap_or(path).display().to_string()
+    match path.strip_prefix(root) {
+        Ok(rel) => rel.iter().map(|c| c.to_string_lossy()).collect::<Vec<_>>().join("/"),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -658,13 +665,13 @@ mod tests {
         test_git(&blog, &["commit", "-q", "--allow-empty", "-m", "one"]);
         test_git(&blog, &["worktree", "add", "-q", "-b", "draft", wt.to_str().unwrap()]);
         test_git(&other, &["init", "-q"]);
-        let blog = fs::canonicalize(&blog).unwrap();
+        let blog = crate::platform::canonicalize(&blog).unwrap();
         let setting = blog.to_str().unwrap();
 
         assert_eq!(root(&blog, setting), Some(blog.clone()));
         assert_eq!(root(&blog.join("_posts"), setting), Some(blog.clone()));
         assert_eq!(root(&blog.join("_posts"), &format!("{setting}/")), Some(blog.clone()));
-        assert_eq!(root(&wt, setting), Some(fs::canonicalize(&wt).unwrap()));
+        assert_eq!(root(&wt, setting), Some(crate::platform::canonicalize(&wt).unwrap()));
         assert_eq!(root(&other, setting), None);
         assert_eq!(root(&base, setting), None);
         assert_eq!(root(&blog, ""), None);

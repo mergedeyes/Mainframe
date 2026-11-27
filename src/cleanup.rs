@@ -443,7 +443,7 @@ fn scan_tree(root: &Path, place: Option<&str>, shared: bool, skip: &HashSet<Path
 /// The project's folder in each other worktree of its repo (folder name, path), so a
 /// project in a subfolder of the repo maps to the same subfolder there.
 fn other_worktrees(root: &Path) -> Vec<(String, PathBuf)> {
-    let Some(top) = git::git_text(root, &["rev-parse", "--show-toplevel"]).map(PathBuf::from) else {
+    let Some(top) = git::git_text(root, &["rev-parse", "--show-toplevel"]).map(|t| git::path_from_git(&t)) else {
         return Vec::new();
     };
     let Ok(rel) = root.strip_prefix(&top) else { return Vec::new() };
@@ -490,7 +490,9 @@ fn scan_one(project: &Project, shared: bool) -> Vec<Item> {
 
     // The project's own clean target last: it may do anything, so it isn't measured.
     for t in targets::list(project).into_iter().filter(|t| t.name == "clean") {
-        items.push(Item::tool(root, format!("{} clean", t.group), "the project's own clean target", Vec::new(), t.cmd));
+        // The cleanup runs as one sh script.
+        let cmd = t.cmd.display(&crate::shell::Shell::sh());
+        items.push(Item::tool(root, format!("{} clean", t.group), "the project's own clean target", Vec::new(), cmd));
     }
 
     for item in &mut items {
@@ -747,7 +749,8 @@ mod tests {
         fs::create_dir_all(wt.join("node_modules")).unwrap();
 
         let items = scan(&root);
-        let titles: Vec<String> = items.iter().map(|i| i.title()).collect();
+        // Shown with the system's separator; what's compared here is which ones.
+        let titles: Vec<String> = items.iter().map(|i| i.title().replace('\\', "/")).collect();
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&wt);
 
@@ -769,8 +772,12 @@ mod tests {
         assert_eq!(items[0].command(&root), "rm -rf -- node_modules");
         assert_eq!(items[3].command(&root), "npm run clean");
         assert_eq!(items[3].size, None);
-        assert_eq!(items[4].command(&root), "rm -rf -- old/target");
-        assert_eq!(items[5].command(&root), "rm -rf -- tools/web/node_modules");
+        // Git's sh on Windows takes either separator.
+        let unix = |s: String| {
+            s.replace(r"'old\target'", "old/target").replace(r"'tools\web\node_modules'", "tools/web/node_modules")
+        };
+        assert_eq!(unix(items[4].command(&root)), "rm -rf -- old/target");
+        assert_eq!(unix(items[5].command(&root)), "rm -rf -- tools/web/node_modules");
         assert_eq!(items[6].command(&root), format!("rm -rf -- {}", quote(&wt.join("node_modules"))));
         assert_eq!(items[7].command(&root), format!("(cd {} && npm run clean)", quote(&wt)));
     }

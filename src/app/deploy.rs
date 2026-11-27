@@ -172,7 +172,7 @@ impl App {
         if let Err(e) = written {
             return self.set_status(format!("can't write {}: {e}", config::pretty_path(&file)), Level::Err);
         }
-        let plan = Plan { cmd: format!("sh {}", quote(&file)), cwd: root.to_path_buf() };
+        let plan = Plan { cmd: crate::cmd::Cmd::Sh(format!("sh {}", quote(&file))), cwd: root.to_path_buf() };
         if d.interactive {
             self.foreground(plan, true);
         } else {
@@ -384,7 +384,8 @@ fn guess(root: &Path, project: Option<&project::Project>, install_dir: &Path) ->
         let out = format!("build/{dir_name}-linux-arm64");
         return Guess { build: format!("GOOS=linux GOARCH=arm64 go build -o {out} ."), artifact: out, bin: dir_name };
     }
-    let build =
-        project.and_then(|p| project::plan(Op::Release, None, &p.root, &Default::default()).ok()).map(|p| p.cmd);
+    let build = project.and_then(|p| project::plan(Op::Release, None, &p.root, &Default::default()).ok());
+    // It runs inside the deploy script, so it's written for sh.
+    let build = build.map(|p| p.cmd.display(&crate::shell::Shell::sh()));
     Guess { build: build.unwrap_or_default(), artifact: String::new(), bin: dir_name }
 }
