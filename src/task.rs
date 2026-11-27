@@ -1,13 +1,10 @@
 //! Background commands whose output streams into the output pane.
 
 use std::{
-    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::{ExitStatus, Stdio},
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender, TryRecvError},
+        Arc,
+        mpsc::{self, Receiver, TryRecvError},
     },
     thread,
     time::{Duration, Instant},
@@ -15,51 +12,16 @@ use std::{
 
 use ratatui::text::Line;
 
+pub use crate::run::Exit;
 use crate::{
     ansi,
-    cmd::{Cmd, Launch},
+    cmd::Cmd,
     locate::{self, Loc},
-    platform::ProcessTree,
+    run::{self, Control, Ctx, Msg, Sink},
     shell::Shell,
 };
 
 const MAX_LINES: usize = 20_000;
-
-/// How a task ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Exit {
-    Code(i32),
-    /// Stopped by Mainframe, or by a signal.
-    Killed,
-    /// A program couldn't be started at all.
-    NotStarted,
-}
-
-impl Exit {
-    pub fn ok(&self) -> bool {
-        *self == Exit::Code(0)
-    }
-
-    pub fn describe(&self) -> String {
-        match self {
-            Exit::Code(c) => format!("exit {c}"),
-            Exit::Killed => "killed".into(),
-            Exit::NotStarted => "didn't start".into(),
-        }
-    }
-}
-
-enum Msg {
-    Line(String),
-    Done(Exit),
-}
-
-/// Shared with the thread that runs the steps, so a kill reaches whichever one is running.
-#[derive(Default)]
-struct Control {
-    stopped: AtomicBool,
-    running: Mutex<Option<ProcessTree>>,
-}
 
 pub struct Task {
     pub label: String,
@@ -71,13 +33,12 @@ pub struct Task {
 
 impl Task {
     pub fn spawn(label: String, cmd: &Cmd, cwd: &Path, shell: &Shell) -> std::io::Result<Self> {
-        let launches = cmd.launches(shell)?;
         let (tx, rx) = mpsc::channel();
         let control = Arc::new(Control::default());
-        let ctl = control.clone();
-        let cwd = cwd.to_path_buf();
+        let (ctl, cmd, cwd, shell) = (control.clone(), cmd.clone(), cwd.to_path_buf(), shell.clone());
         thread::Builder::new().name(format!("task {label}")).spawn(move || {
-            let exit = run(launches, &cwd, &tx, &ctl);
+            let mut ctx = Ctx::new(&cwd, shell, Sink::Pane(tx.clone()), &ctl);
+            let exit = run::run(&cmd, &mut ctx);
             let _ = tx.send(Msg::Done(exit));
         })?;
         Ok(Self { label, rx, control, started: Instant::now(), finished: false })
@@ -107,17 +68,11 @@ impl Task {
 
     /// Asks the running program and everything it started to stop, without waiting for it.
     pub fn signal(&self) {
-        self.control.stopped.store(true, Ordering::SeqCst);
-        if let Some(tree) = &*self.control.running.lock().unwrap_or_else(|e| e.into_inner()) {
-            tree.terminate();
-        }
+        self.control.stop(false);
     }
 
     pub fn kill(&mut self) {
-        self.control.stopped.store(true, Ordering::SeqCst);
-        if let Some(tree) = &*self.control.running.lock().unwrap_or_else(|e| e.into_inner()) {
-            tree.kill();
-        }
+        self.control.stop(true);
     }
 }
 
@@ -128,92 +83,6 @@ impl Drop for Task {
             self.kill();
         }
     }
-}
-
-/// Runs the programs in order on the task's thread, stopping at the first that fails.
-fn run(launches: Vec<Launch>, cwd: &Path, tx: &Sender<Msg>, control: &Control) -> Exit {
-    let several = launches.len() > 1;
-    let mut first = true;
-    for Launch { mut command, display, unless_exists } in launches {
-        if control.stopped.load(Ordering::SeqCst) {
-            return Exit::Killed;
-        }
-        if unless_exists.is_some_and(|p| cwd.join(p).exists()) {
-            continue;
-        }
-        if several && !first {
-            let _ = tx.send(Msg::Line(format!("\x1b[2m$ {display}\x1b[0m")));
-        }
-        first = false;
-        command
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            // stdout isn't a tty, so ask tools to keep their colors anyway.
-            .env("CARGO_TERM_COLOR", "always")
-            .env("CLICOLOR_FORCE", "1")
-            .env("FORCE_COLOR", "1")
-            .env("GIT_TERMINAL_PROMPT", "0");
-        // Away from the terminal (password prompts fail fast instead of fighting the TUI
-        // for it), and grouped so stopping it takes grandchildren like the binary under
-        // `cargo run` along.
-        ProcessTree::prepare(&mut command);
-        let mut child = match command.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                let program = command.get_program().to_string_lossy().into_owned();
-                let _ = tx.send(Msg::Line(format!("\x1b[31mcouldn't start {program}: {e}\x1b[0m")));
-                return Exit::NotStarted;
-            }
-        };
-        {
-            let mut running = control.running.lock().unwrap_or_else(|e| e.into_inner());
-            let tree = ProcessTree::attach(&child);
-            // A kill that came while it was starting.
-            if control.stopped.load(Ordering::SeqCst) {
-                tree.kill();
-            }
-            *running = Some(tree);
-        }
-        let out = child.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send>);
-        let err = child.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send>);
-        let readers: Vec<_> = [out, err]
-            .into_iter()
-            .flatten()
-            .map(|stream| {
-                let tx = tx.clone();
-                thread::spawn(move || {
-                    for chunk in BufReader::new(stream).split(b'\n') {
-                        let Ok(mut bytes) = chunk else { break };
-                        if bytes.last() == Some(&b'\r') {
-                            bytes.pop();
-                        }
-                        if tx.send(Msg::Line(String::from_utf8_lossy(&bytes).into_owned())).is_err() {
-                            break;
-                        }
-                    }
-                })
-            })
-            .collect();
-        for r in readers {
-            let _ = r.join();
-        }
-        let status = child.wait();
-        control.running.lock().unwrap_or_else(|e| e.into_inner()).take();
-        let stopped = control.stopped.load(Ordering::SeqCst);
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(_) if stopped => return Exit::Killed,
-            Ok(s) => return exit_of(s),
-            Err(_) => return Exit::Killed,
-        }
-    }
-    Exit::Code(0)
-}
-
-fn exit_of(status: ExitStatus) -> Exit {
-    status.code().map_or(Exit::Killed, Exit::Code)
 }
 
 #[derive(Default)]
@@ -394,9 +263,9 @@ mod tests {
     fn steps_run_in_order_and_stop_at_the_first_failure() {
         let dir = temp_dir("task-steps");
         let cmd = Cmd::Steps(vec![
-            Step::words("git --version"),
-            Step::words("git no-such-command"),
-            Step::words("git --version"),
+            Step::words("git --version").into(),
+            Step::words("git no-such-command").into(),
+            Step::words("git --version").into(),
         ]);
         let (lines, exit) = finish(cmd, &dir);
         assert_eq!(exit, Exit::Code(1));
@@ -420,7 +289,7 @@ mod tests {
         let dir = temp_dir("task-missing");
         let (lines, exit) = finish(Step::new("mainframe-no-such-program").into(), &dir);
         assert_eq!(exit, Exit::NotStarted);
-        assert!(lines.iter().any(|l| l.starts_with("couldn't start mainframe-no-such-program")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("couldn't start mainframe-no-such-program")), "{lines:?}");
     }
 
     #[test]

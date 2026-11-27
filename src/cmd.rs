@@ -1,9 +1,9 @@
 //! What a task runs. Mainframe's own commands are programs started directly with their
-//! arguments, so no shell's quoting or syntax gets in the way on any system; only what the
-//! user writes goes through their shell.
+//! arguments, and the logic between them is Rust ([`Builtin`]), so no shell's quoting or
+//! syntax gets in the way on any system; only what the user writes goes through their shell.
+//! `run` carries them out.
 
 use std::{
-    io,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -14,12 +14,67 @@ use crate::{platform, shell::Shell};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Cmd {
-    /// Programs run one after another, each only when the one before succeeded.
-    Steps(Vec<Step>),
+    /// Run one after another, each only when the one before succeeded.
+    Steps(Vec<Job>),
     /// A command line for the user's shell: typed with `:`, custom actions, runners.
     Shell(String),
     /// A POSIX sh script of Mainframe's own that isn't Rust yet. On Windows it runs in Git's sh.
     Sh(String),
+}
+
+/// One step of [`Cmd::Steps`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Job {
+    /// A program.
+    Run(Step),
+    /// A step of Mainframe's own, in Rust.
+    Do(Builtin),
+}
+
+impl From<Step> for Job {
+    fn from(s: Step) -> Self {
+        Job::Run(s)
+    }
+}
+
+impl From<Builtin> for Job {
+    fn from(b: Builtin) -> Self {
+        Job::Do(b)
+    }
+}
+
+impl Job {
+    pub fn display(&self, shell: &Shell) -> String {
+        match self {
+            Job::Run(s) => s.display(shell),
+            Job::Do(b) => b.describe(),
+        }
+    }
+}
+
+/// What used to be shell script between the programs: plain data, so a task can be
+/// rerun and saved like any other. `run` has the code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Builtin {
+    /// Prints a line.
+    Say(String),
+    /// Waits, unless the task is stopped.
+    Sleep(u64),
+    /// Deletes local branches whose remote branch is gone, when their work is in `base`.
+    PruneGoneBranches { base: String },
+}
+
+impl Builtin {
+    /// What it does, in the output pane's command line and in forms.
+    pub fn describe(&self) -> String {
+        match self {
+            Builtin::Say(text) => format!("echo {text}"),
+            Builtin::Sleep(s) => format!("wait {s}s"),
+            Builtin::PruneGoneBranches { base } => {
+                format!("delete branches whose remote branch is gone and whose work is in {base}")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,11 +87,24 @@ pub struct Step {
     /// Skipped when this (relative to where the task runs) exists, like `meson setup build`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unless_exists: Option<PathBuf>,
+    /// Runs here instead of where the task runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<PathBuf>,
+    /// A failure doesn't stop the steps after it (tidying up that may have nothing to do).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub may_fail: bool,
 }
 
 impl Step {
     pub fn new(program: impl Into<String>) -> Self {
-        Self { program: program.into(), args: Vec::new(), env: Vec::new(), unless_exists: None }
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            unless_exists: None,
+            dir: None,
+            may_fail: false,
+        }
     }
 
     /// A fixed command line, split at spaces: `Step::words("cargo build --release")`.
@@ -88,9 +156,19 @@ impl Step {
         self
     }
 
+    pub fn in_dir(mut self, dir: &Path) -> Self {
+        self.dir = Some(dir.to_path_buf());
+        self
+    }
+
+    pub fn may_fail(mut self) -> Self {
+        self.may_fail = true;
+        self
+    }
+
     /// This, then `next` if it succeeded.
-    pub fn then(self, next: Step) -> Cmd {
-        Cmd::Steps(vec![self, next])
+    pub fn then(self, next: impl Into<Job>) -> Cmd {
+        Cmd::Steps(vec![self.into(), next.into()])
     }
 
     pub fn command(&self) -> Command {
@@ -109,7 +187,10 @@ impl Step {
         let mut out: Vec<String> = self.env.iter().map(|(k, v)| format!("{k}={}", shell.quote(v))).collect();
         out.push(shell.quote(&self.program));
         out.extend(args.iter().map(|a| shell.quote(a)));
-        let line = out.join(" ");
+        let mut line = out.join(" ");
+        if let Some(d) = &self.dir {
+            line = format!("{line}   (in {})", crate::config::pretty_path(d));
+        }
         match &self.unless_exists {
             Some(p) => format!("{line} (if there's no {})", p.display()),
             None => line,
@@ -119,15 +200,14 @@ impl Step {
 
 impl From<Step> for Cmd {
     fn from(step: Step) -> Self {
-        Cmd::Steps(vec![step])
+        Cmd::Steps(vec![step.into()])
     }
 }
 
-/// One process of a task, ready to start.
-pub struct Launch {
-    pub command: Command,
-    pub display: String,
-    pub unless_exists: Option<PathBuf>,
+impl From<Builtin> for Cmd {
+    fn from(b: Builtin) -> Self {
+        Cmd::Steps(vec![b.into()])
+    }
 }
 
 impl Cmd {
@@ -140,7 +220,7 @@ impl Cmd {
     pub fn then(self, step: Step) -> Self {
         match self {
             Cmd::Steps(mut steps) => {
-                steps.push(step);
+                steps.push(step.into());
                 Cmd::Steps(steps)
             }
             Cmd::Shell(line) => Cmd::Shell(format!("{line} && {}", step.display(&Shell::default()))),
@@ -156,56 +236,11 @@ impl Cmd {
             Cmd::Sh(line) => line.replace(crate::git::GIT, "git"),
         }
     }
-
-    /// The processes to start, in order.
-    pub fn launches(&self, shell: &Shell) -> io::Result<Vec<Launch>> {
-        Ok(match self {
-            Cmd::Steps(steps) => steps
-                .iter()
-                .map(|s| Launch {
-                    command: s.command(),
-                    display: s.display(shell),
-                    unless_exists: s.unless_exists.clone(),
-                })
-                .collect(),
-            Cmd::Shell(line) => {
-                vec![Launch { command: shell.command(line), display: line.clone(), unless_exists: None }]
-            }
-            Cmd::Sh(line) => {
-                let sh = platform::posix_sh().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "this still needs sh — install Git for Windows")
-                })?;
-                let mut command = Command::new(sh);
-                command.arg("-c").arg(line);
-                vec![Launch { command, display: self.display(shell), unless_exists: None }]
-            }
-        })
-    }
-}
-
-#[cfg(test)]
-impl Cmd {
-    /// Runs it to the end in `cwd` and returns whether it succeeded, with stdout and stderr.
-    pub fn run_in(&self, cwd: &Path) -> (bool, String) {
-        let mut out = String::new();
-        for mut l in self.launches(&Shell::default()).unwrap() {
-            if l.unless_exists.as_ref().is_some_and(|p| cwd.join(p).exists()) {
-                continue;
-            }
-            let o = l.command.current_dir(cwd).env("LC_ALL", "C").output().unwrap();
-            out.push_str(&String::from_utf8_lossy(&o.stdout));
-            out.push_str(&String::from_utf8_lossy(&o.stderr));
-            if !o.status.success() {
-                return (false, out);
-            }
-        }
-        (true, out)
-    }
 }
 
 /// On Windows `Command` only finds `.exe` files on PATH by itself; `code`, `npm` and `npx`
 /// are `.cmd` scripts. A full path also lets std run those safely.
-fn resolve(program: &str) -> PathBuf {
+pub fn resolve(program: &str) -> PathBuf {
     if cfg!(windows) && !program.contains(['/', '\\']) {
         platform::which(program).unwrap_or_else(|| program.into())
     } else {

@@ -23,6 +23,7 @@ mod proc;
 mod project;
 mod projects;
 mod release;
+mod run;
 mod scaffold;
 mod settings;
 mod shell;
@@ -38,7 +39,6 @@ use std::{
     env,
     io::{self, Write},
     path::PathBuf,
-    process::Stdio,
     time::Duration,
 };
 
@@ -118,17 +118,17 @@ fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground, shell: &shell
         println!("\x1b[2m$ {}\x1b[0m", fg.cmd.display(shell));
     }
 
-    let (status, output) = match fg.cmd.launches(shell) {
-        Ok(launches) => run_launches(launches, fg, fg.wait),
-        Err(e) => (Err(e), None),
-    };
+    let control = run::Control::default();
+    let capture = fg.cd_to_output.then(String::new);
+    let mut ctx = run::Ctx::new(&fg.cwd, shell.clone(), run::Sink::Terminal { capture }, &control);
+    let exit = run::run(&fg.cmd, &mut ctx);
+    let output = ctx.captured();
 
     if fg.wait {
-        match status {
-            Ok(None) => print!("\n\x1b[32m✔ nothing to do\x1b[0m"),
-            Ok(Some(s)) if s.success() => print!("\n\x1b[32m✔ exited 0\x1b[0m"),
-            Ok(Some(s)) => print!("\n\x1b[31m✘ {}\x1b[0m", s.code().map_or("killed".into(), |c| format!("exit {c}"))),
-            Err(e) => print!("\n\x1b[31m✘ {e}\x1b[0m"),
+        if exit.ok() {
+            print!("\n\x1b[32m✔ exited 0\x1b[0m");
+        } else {
+            print!("\n\x1b[31m✘ {}\x1b[0m", exit.describe());
         }
         print!(" — press Enter to return to mainframe ");
         io::stdout().flush()?;
@@ -142,39 +142,4 @@ fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground, shell: &shell
     // cursor position, which some terminals answer slowly or not at all.
     *terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     Ok(output)
-}
-
-/// Runs the processes in the real terminal, one after another while they succeed. With
-/// `cd_to_output`, stdout is captured (pickers like fzf draw on the terminal itself, so
-/// that doesn't disturb them).
-fn run_launches(
-    launches: Vec<cmd::Launch>,
-    fg: &Foreground,
-    show_steps: bool,
-) -> (io::Result<Option<std::process::ExitStatus>>, Option<String>) {
-    let several = launches.len() > 1;
-    let mut captured = fg.cd_to_output.then(String::new);
-    let mut last = None;
-    for (i, mut l) in launches.into_iter().enumerate() {
-        if l.unless_exists.as_ref().is_some_and(|p| fg.cwd.join(p).exists()) {
-            continue;
-        }
-        if show_steps && several && i > 0 {
-            println!("\x1b[2m$ {}\x1b[0m", l.display);
-        }
-        l.command.current_dir(&fg.cwd);
-        let status = match &mut captured {
-            Some(out) => l.command.stderr(Stdio::inherit()).output().map(|o| {
-                out.push_str(&String::from_utf8_lossy(&o.stdout));
-                o.status
-            }),
-            None => l.command.status(),
-        };
-        match status {
-            Ok(s) if s.success() => last = Some(s),
-            other => return (other.map(Some), captured),
-        }
-    }
-    // None: every step was skipped, which counts as success.
-    (Ok(last), captured)
 }
