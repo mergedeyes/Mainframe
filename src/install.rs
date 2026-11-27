@@ -1,6 +1,9 @@
 //! Finds installable executables in a project and describes what they were built for.
 
-use crate::desktop::DesktopPlan;
+use crate::{
+    cmd::{Builtin, Job, Step},
+    desktop::DesktopPlan,
+};
 
 use std::{
     fs::{self, File},
@@ -219,17 +222,15 @@ fn shadowing_copy(name: &str, dest: &Path) -> Option<PathBuf> {
 
 /// Shell command that removes an installed copy: `cargo uninstall` when cargo
 /// put it there (keeps cargo's records straight), plain `rm` otherwise.
-pub fn removal_cmd(path: &Path, name: &str) -> String {
-    let q = crate::project::quote;
+pub fn removal(path: &Path, name: &str) -> Job {
     let cargo_home =
         std::env::var_os("CARGO_HOME").map(PathBuf::from).unwrap_or_else(|| crate::config::home().join(".cargo"));
     if path.parent() == Some(&cargo_home.join("bin"))
         && let Some(pkg) = cargo_owner(&cargo_home, name)
     {
-        let qs = crate::project::quote_str;
-        return format!("cargo uninstall {} --bin {}", qs(&pkg), qs(name));
+        return Step::new("cargo").args(["uninstall", &pkg, "--bin", name]).into();
     }
-    format!("rm -- {}", q(path))
+    Builtin::RemoveFile(path.to_path_buf()).into()
 }
 
 /// Which `cargo install`ed package owns binary `name` (from .crates.toml).
@@ -247,15 +248,17 @@ fn cargo_owner(cargo_home: &Path, name: &str) -> Option<String> {
 /// binaries in `~/.local/bin`. Plain `cargo install` would use ~/.cargo/bin.
 /// What `p` in the install picker runs first: only the commits the branch's remote has.
 /// `--ff-only` stops instead of merging when the branch has commits of its own.
-pub const PULL: &str = "git pull --ff-only";
+pub fn pull() -> Step {
+    Step::git().args(["pull", "--ff-only"])
+}
 
 /// What `p` runs before installing `c`: the pull, and a rebuild when `c` is a build the pull
 /// makes stale. Err when Mainframe can't tell how to rebuild it.
-pub fn pull_first(c: &Candidate, cargo: bool) -> Result<String, String> {
+pub fn pull_first(c: &Candidate, cargo: bool) -> Result<Vec<Step>, String> {
     match (c.kind.as_str(), &c.triple) {
-        ("script", _) => Ok(PULL.into()),
-        ("release", None) if cargo => Ok(format!("{PULL} && cargo build --release")),
-        ("debug", None) if cargo => Ok(format!("{PULL} && cargo build")),
+        ("script", _) => Ok(vec![pull()]),
+        ("release", None) if cargo => Ok(vec![pull(), Step::words("cargo build --release")]),
+        ("debug", None) if cargo => Ok(vec![pull(), Step::words("cargo build")]),
         _ => Err(format!(
             "p can't rebuild {} ({}) after pulling — g p, build it, then i{}",
             c.name,
@@ -265,10 +268,63 @@ pub fn pull_first(c: &Candidate, cargo: bool) -> Result<String, String> {
     }
 }
 
-pub fn cargo_install_cmd(install_dir: &Path) -> String {
+pub fn cargo_install(install_dir: &Path) -> Step {
+    let step = Step::words("cargo install --path .");
     match install_dir.parent().filter(|_| install_dir.file_name().is_some_and(|n| n == "bin")) {
-        Some(root) => format!("cargo install --path . --root {}", crate::project::quote(root)),
-        None => "cargo install --path .".into(),
+        Some(root) => step.arg("--root").path(root),
+        None => step,
+    }
+}
+
+/// [`Builtin::InstallFile`]: copies `src` to `dest`, executable, next to it first and then
+/// renamed over it, so a running copy of the program doesn't stand in the way. Notes when
+/// `dest`'s folder isn't on PATH.
+pub fn install_file(ctx: &mut crate::run::Ctx, src: &Path, dest: &Path) -> Result<(), String> {
+    let pretty = crate::config::pretty_path(dest);
+    let dir = dest.parent().ok_or("no folder to install into")?;
+    fs::create_dir_all(dir).map_err(|e| format!("can't create {}: {e}", crate::config::pretty_path(dir)))?;
+    let name = dest.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dir.join(format!(".{name}.mainframe-new"));
+    let copied = fs::copy(src, &tmp).and_then(|_| make_executable(&tmp)).and_then(|_| replace(&tmp, dest));
+    if let Err(e) = copied {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("can't install {pretty}: {e}"));
+    }
+    ctx.success(format!("installed → {pretty}"));
+    let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d == dir));
+    if !on_path {
+        ctx.say(format!("note: {} is not on your PATH", crate::config::pretty_path(dir)));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_executable(p: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(p, fs::Permissions::from_mode(0o755))
+}
+
+#[cfg(windows)]
+fn make_executable(_p: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Renames `new` over `dest`. A running .exe on Windows can't be replaced, but it can be
+/// renamed: it goes to `<name>.old` (removed by the next install, once it isn't running).
+fn replace(new: &Path, dest: &Path) -> std::io::Result<()> {
+    match fs::rename(new, dest) {
+        Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied => {
+            let old = dest.with_extension("old");
+            let _ = fs::remove_file(&old);
+            fs::rename(dest, &old)?;
+            fs::rename(new, dest)
+        }
+        other => {
+            if cfg!(windows) {
+                let _ = fs::remove_file(dest.with_extension("old"));
+            }
+            other
+        }
     }
 }
 
@@ -372,14 +428,41 @@ mod tests {
     /// Scripts only need the pull; plain cargo builds are rebuilt after it; the rest can't be.
     #[test]
     fn pull_first_rebuilds_what_it_knows_how_to() {
-        assert_eq!(pull_first(&candidate("script", None), false).unwrap(), "git pull --ff-only");
+        let shown = |steps: Vec<Step>| {
+            steps.iter().map(|s| s.display(&crate::shell::Shell::sh())).collect::<Vec<_>>().join(" && ")
+        };
+        assert_eq!(shown(pull_first(&candidate("script", None), false).unwrap()), "git pull --ff-only");
         assert_eq!(
-            pull_first(&candidate("release", None), true).unwrap(),
+            shown(pull_first(&candidate("release", None), true).unwrap()),
             "git pull --ff-only && cargo build --release"
         );
-        assert_eq!(pull_first(&candidate("debug", None), true).unwrap(), "git pull --ff-only && cargo build");
+        assert_eq!(shown(pull_first(&candidate("debug", None), true).unwrap()), "git pull --ff-only && cargo build");
         assert!(pull_first(&candidate("release", Some("aarch64-unknown-linux-gnu")), true).is_err());
         assert!(pull_first(&candidate("release example", None), true).unwrap_err().contains("cargo install row"));
         assert!(!pull_first(&candidate("binary", None), false).unwrap_err().contains("cargo install row"));
+    }
+
+    /// Into a folder that isn't there yet, then over the installed copy.
+    #[test]
+    fn installs_and_replaces() {
+        use crate::{cmd::Cmd, run::testing::run_in, testutil::temp_dir};
+        let dir = temp_dir("install-file");
+        let (src, dest) = (dir.join("app-build"), dir.join("bin").join("app"));
+        fs::write(&src, "one").unwrap();
+        let install = Cmd::from(Builtin::InstallFile { src: src.clone(), dest: dest.clone() });
+        let (ok, out) = run_in(&install, &dir);
+        assert!(ok, "{out}");
+        assert!(out.contains("installed → "), "{out}");
+        fs::write(&src, "two").unwrap();
+        assert!(run_in(&install, &dir).0);
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "two");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o755);
+        }
+        let left: Vec<_> = fs::read_dir(dir.join("bin")).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left, ["app"]);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

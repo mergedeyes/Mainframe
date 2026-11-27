@@ -89,6 +89,22 @@ fn simplify(p: PathBuf) -> PathBuf {
     if ok { PathBuf::from(plain) } else { p }
 }
 
+/// Bytes free for this user on the file system `path` is on.
+pub fn free_space(path: &Path) -> Option<u64> {
+    sys::free_space(path)
+}
+
+/// Writes out what the file system holds back, so `free_space` counts files just deleted
+/// (btrfs frees them in its own time). Best effort.
+pub fn flush(path: &Path) {
+    sys::flush(path);
+}
+
+/// A desktop notification, when the system has a way to show one. Best effort.
+pub fn notify(summary: &str, body: &str) {
+    sys::notify(summary, body);
+}
+
 /// Finds a program on PATH. On Windows `cargo` finds `cargo.exe`, `code` finds `code.cmd`.
 pub fn which(name: &str) -> Option<PathBuf> {
     env::split_paths(&env::var_os("PATH")?).find_map(|dir| sys::program_in(&dir, name))

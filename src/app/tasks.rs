@@ -9,7 +9,6 @@ use ratatui::{
 
 use super::{App, Focus, Level};
 use crate::{
-    cmd::Step,
     config,
     project::{self, Plan},
     task::{Output, Task},
@@ -98,10 +97,8 @@ impl App {
             // The bell marks the terminal urgent; the notification is for when it's not in view.
             print!("\x07");
             let _ = std::io::stdout().flush();
-            if project::which("notify-send").is_some() {
-                for (summary, body) in notify {
-                    self.spawn_detached(Step::words("notify-send -a Mainframe").args([summary, body]));
-                }
+            for (summary, body) in notify {
+                crate::platform::notify(&summary, &body);
             }
         }
         if let Some((msg, level)) = done {

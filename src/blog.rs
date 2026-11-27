@@ -5,13 +5,14 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use crate::{
+    cmd::{Builtin, Cmd, Step},
     config,
     git::{git_lines, git_text},
-    project::{quote_str, which},
+    project::which,
 };
 
 pub const DRAFTS: &str = "_drafts";
@@ -472,42 +473,93 @@ pub fn change(root: &Path, path: &Path) -> Change {
 }
 
 /// Commits `_drafts` and `_posts` as they are with `message` and pushes.
-pub fn commit_cmd(root: &Path, message: &str) -> String {
-    let dirs: Vec<&str> = [DRAFTS, POSTS].into_iter().filter(|d| root.join(d).is_dir()).collect();
-    format!("git add -A {} && git commit -m {} && git push", dirs.join(" "), quote_str(message))
+pub fn commit_cmd(root: &Path, message: &str) -> Cmd {
+    let dirs = [DRAFTS, POSTS].into_iter().filter(|d| root.join(d).is_dir());
+    Cmd::Steps(vec![
+        Step::git().args(["add", "-A"]).args(dirs).into(),
+        Step::git().args(["commit", "-m", message]).into(),
+        Step::git().arg("push").into(),
+    ])
 }
 
 /// Commits only the /now page with `message` and pushes.
-pub fn commit_now_cmd(message: &str) -> String {
-    format!("git add -A -- {NOW} && git commit -m {} && git push", quote_str(message))
+pub fn commit_now_cmd(message: &str) -> Cmd {
+    Cmd::Steps(vec![
+        Step::git().args(["add", "-A", "--", NOW]).into(),
+        Step::git().args(["commit", "-m", message]).into(),
+        Step::git().arg("push").into(),
+    ])
 }
 
-/// Shell steps that follow the GitHub Pages build of the pushed commit, then print and
-/// notify "post live: <url>" (or "now page live: …") or what went wrong. None without `gh`
-/// or a GitHub origin.
-pub fn follow_pages_cmd(root: &Path, post_path: &Path) -> Option<String> {
+/// A step that follows the GitHub Pages build of the pushed commit, then prints and
+/// notifies "post live: <url>" (or "now page live: …") or what went wrong. None without
+/// `gh` or a GitHub origin.
+pub fn follow_pages_cmd(root: &Path, post_path: &Path) -> Option<Builtin> {
     which("gh")?;
     let origin = git_text(root, &["remote", "get-url", "origin"])?;
     let repo = crate::release::github_repo(&origin)?;
     let what = if post(post_path)?.state == State::Now { "now page" } else { "post" };
-    Some(follow_pages_script(&repo, &format!("{what} live: {}", post_url(root, &repo, post_path)?)))
+    Some(Builtin::FollowPages { live: format!("{what} live: {}", post_url(root, &repo, post_path)?), repo })
 }
 
-/// The polling loop behind [`follow_pages_cmd`], in braces so it joins a `&&` chain as one
-/// step. About three minutes, every five seconds: the build for a push shows up after a while.
-/// `live` is the message once it's built.
-fn follow_pages_script(repo: &str, live: &str) -> String {
-    let api = format!("gh api repos/{repo}/pages/builds/latest");
-    let live = quote_str(live);
-    format!(
-        "{{ echo 'waiting for the GitHub Pages build …'; head=$(git rev-parse HEAD); s=; \
-         for i in $(seq 36); do sleep 5; r=$({api} -q '.commit + \" \" + .status' 2>/dev/null); \
-         case \"$r\" in \"$head built\") s=built; break;; \"$head errored\") s=errored; break;; esac; done; \
-         case $s in built) msg={live};; \
-         errored) msg=\"Pages build failed: $({api} -q .error.message 2>/dev/null)\";; \
-         *) msg='no finished Pages build for this commit after 3 minutes (does Pages build this branch?)';; esac; \
-         echo \"$msg\"; command -v notify-send >/dev/null && notify-send -a Mainframe \"$msg\"; [ \"$s\" = built ]; }}"
-    )
+/// How the Pages build for a commit went.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Pages {
+    Built,
+    Errored(String),
+    /// No finished build for the commit in time.
+    NotYet,
+    Stopped,
+}
+
+/// Polls until the latest Pages build is `head`'s and has finished. `latest` asks for
+/// "<commit> <status>", `error` for why a build failed, `wait` pauses between tries (false:
+/// stopped). The build for a push shows up after a while.
+pub fn wait_for_pages(
+    head: &str,
+    tries: usize,
+    mut latest: impl FnMut() -> Option<String>,
+    mut error: impl FnMut() -> Option<String>,
+    mut wait: impl FnMut() -> bool,
+) -> Pages {
+    for _ in 0..tries {
+        if !wait() {
+            return Pages::Stopped;
+        }
+        match latest().as_deref().and_then(|r| r.split_once(' ')) {
+            Some((commit, "built")) if commit == head => return Pages::Built,
+            Some((commit, "errored")) if commit == head => return Pages::Errored(error().unwrap_or_default()),
+            _ => {}
+        }
+    }
+    Pages::NotYet
+}
+
+/// [`Builtin::FollowPages`]: about three minutes, every five seconds.
+pub fn follow_pages(ctx: &mut crate::run::Ctx, repo: &str, live: &str) -> Result<(), String> {
+    ctx.say("waiting for the GitHub Pages build …");
+    let head = ctx.ask(&Step::words("git rev-parse HEAD")).ok_or("git rev-parse HEAD failed")?;
+    let api = Step::new("gh").args(["api", &format!("repos/{repo}/pages/builds/latest"), "-q"]);
+    let latest = api.clone().arg(".commit + \" \" + .status");
+    let error = api.arg(".error.message");
+    let pages = {
+        let ctx = &*ctx;
+        wait_for_pages(&head, 36, || ctx.ask(&latest), || ctx.ask(&error), || ctx.sleep(Duration::from_secs(5)))
+    };
+    let msg = match pages {
+        Pages::Built => {
+            ctx.success(live);
+            crate::platform::notify("Mainframe", live);
+            return Ok(());
+        }
+        Pages::Stopped => return Err("stopped".into()),
+        Pages::Errored(why) => format!("Pages build failed: {why}"),
+        Pages::NotYet => {
+            "no finished Pages build for this commit after 3 minutes (does Pages build this branch?)".into()
+        }
+    };
+    crate::platform::notify("Mainframe", &msg);
+    Err(msg)
 }
 
 /// The address of a post, by Jekyll's default permalink `/:year/:month/:day/:title/`, or of
@@ -704,12 +756,13 @@ mod tests {
     fn commits_only_the_folders_that_exist() {
         let root = temp_dir("blog-commit");
         fs::create_dir_all(root.join("_posts")).unwrap();
+        let sh = crate::shell::Shell::sh();
         assert_eq!(
-            commit_cmd(&root, "post: update It's"),
+            commit_cmd(&root, "post: update It's").display(&sh),
             "git add -A _posts && git commit -m 'post: update It'\\''s' && git push"
         );
         fs::create_dir_all(root.join("_drafts")).unwrap();
-        assert!(commit_cmd(&root, "x").starts_with("git add -A _drafts _posts && "));
+        assert!(commit_cmd(&root, "x").display(&sh).starts_with("git add -A _drafts _posts && "));
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -729,46 +782,28 @@ mod tests {
 
     /// The loop with stand-ins for `gh` and `sleep`: it waits for the build of HEAD, not an
     /// older one, and says how it ended; in a `&&` chain it only runs after the push worked.
-    // Runs a sh script; Windows gets these once the script is Rust.
-    #[cfg(unix)]
     #[test]
     fn follows_the_pages_build() {
-        let dir = temp_dir("blog-pages");
-        test_git(&dir, &["init", "-q"]);
-        test_git(&dir, &["commit", "-q", "--allow-empty", "-m", "one"]);
-        let head = test_git(&dir, &["rev-parse", "HEAD"]).trim().to_string();
-        let bin = dir.join("bin");
-        crate::testutil::stub(&bin, "sleep", "#!/bin/sh\n");
-        crate::testutil::stub(&bin, "notify-send", "#!/bin/sh\n");
-        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-        let run = |gh: &str, before: &str| {
-            crate::testutil::stub(&bin, "gh", gh);
-            let script =
-                format!("{before}{}", follow_pages_script("me/blog", "post live: https://me.github.io/blog/x/"));
-            let out = std::process::Command::new("sh")
-                .args(["-c", &script])
-                .current_dir(&dir)
-                .env("PATH", &path)
-                .output()
-                .unwrap();
-            let text = String::from_utf8_lossy(&out.stdout).into_owned();
-            (out.status.success(), text.lines().last().unwrap_or_default().to_string())
+        let run = |answers: &[&str], tries: usize| {
+            let mut answers = answers.iter();
+            let mut waits = 0;
+            let pages = wait_for_pages(
+                "abc",
+                tries,
+                || answers.next().map(|s| s.to_string()),
+                || Some("bad config".into()),
+                || {
+                    waits += 1;
+                    true
+                },
+            );
+            (pages, waits)
         };
         // An older build first, then this commit's.
-        let gh = format!(
-            "#!/bin/sh\nn=$(cat n 2>/dev/null || echo 0); echo $((n+1)) > n\n\
-             [ $n -lt 2 ] && echo 'old built' || echo '{head} built'\n"
-        );
-        assert_eq!(run(&gh, ""), (true, "post live: https://me.github.io/blog/x/".into()));
-        assert_eq!(fs::read_to_string(dir.join("n")).unwrap().trim(), "3");
-
-        let errored =
-            format!("#!/bin/sh\ncase \"$*\" in *error*) echo 'bad config';; *) echo '{head} errored';; esac\n");
-        assert_eq!(run(&errored, ""), (false, "Pages build failed: bad config".into()));
-        let never = "#!/bin/sh\necho 'old building'\n";
-        assert!(run(never, "").1.starts_with("no finished Pages build"));
-        assert_eq!(run(never, "false && "), (false, String::new()));
-        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(run(&["old built", "abc building", "abc built"], 36), (Pages::Built, 3));
+        assert_eq!(run(&["abc errored"], 36), (Pages::Errored("bad config".into()), 1));
+        assert_eq!(run(&["old building"; 5], 5), (Pages::NotYet, 5));
+        assert_eq!(wait_for_pages("abc", 3, || None, || None, || false), Pages::Stopped);
     }
 
     #[test]
@@ -881,7 +916,10 @@ mod tests {
         write(&now, "---\npermalink: \"jetzt/\"\n---\n");
         fs::write(root.join("CNAME"), "blog.example.org").unwrap();
         assert_eq!(post_url(&root, "jan/blog", &now).as_deref(), Some("https://blog.example.org/jetzt/"));
-        assert_eq!(commit_now_cmd("now: update"), "git add -A -- now.md && git commit -m 'now: update' && git push");
+        assert_eq!(
+            commit_now_cmd("now: update").display(&crate::shell::Shell::sh()),
+            "git add -A -- now.md && git commit -m 'now: update' && git push"
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 

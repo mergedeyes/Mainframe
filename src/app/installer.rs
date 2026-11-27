@@ -11,12 +11,12 @@ use ratatui::{
 
 use super::{App, Confirmed, Level, Mode};
 use crate::{
-    cmd::{Cmd, Step},
+    cmd::{Builtin, Cmd, Job, Step},
     config::{self, DesktopMode},
     desktop::{self, DesktopPlan},
     filter_list, git,
     install::{self, Candidate},
-    project::{self, Kind, Plan, quote, quote_str},
+    project::{self, Kind, Plan},
 };
 
 pub struct InstallPicker {
@@ -64,8 +64,8 @@ pub struct DesktopReview {
 /// What the review was gating.
 pub enum AfterReview {
     /// The candidate, the project root, and what runs first (`p`: pull, maybe rebuild).
-    InstallBinary(Box<Candidate>, PathBuf, Option<String>),
-    CargoInstall(PathBuf, Option<String>),
+    InstallBinary(Box<Candidate>, PathBuf, Option<Vec<Step>>),
+    CargoInstall(PathBuf, Option<Vec<Step>>),
     Nothing,
 }
 
@@ -153,7 +153,7 @@ impl App {
                         Ok(before) => AfterReview::InstallBinary(Box::new(c), root, Some(before)),
                         Err(e) => return self.set_status(e, Level::Info),
                     },
-                    None => AfterReview::CargoInstall(root, Some(install::PULL.into())),
+                    None => AfterReview::CargoInstall(root, Some(vec![install::pull()])),
                 };
                 self.mode = Mode::Normal;
                 self.start_install(then, plans);
@@ -171,14 +171,15 @@ impl App {
                 let Some(shadow) = c.shadowed_by.clone() else {
                     return self.set_status("nothing shadows this one on PATH", Level::Info);
                 };
-                let cmd = install::removal_cmd(&shadow, &c.name);
+                let job = install::removal(&shadow, &c.name);
+                let shown = job.display(&self.config.shell());
                 self.mode = Mode::Confirm {
                     msg: format!(
-                        "Remove {} so {} runs? ({cmd}) [y/N]",
+                        "Remove {} so {} runs? ({shown}) [y/N]",
                         config::pretty_path(&shadow),
                         config::pretty_path(&c.dest)
                     ),
-                    action: Confirmed::Task(Plan { cmd: Cmd::Sh(cmd), cwd: self.browser.cwd.clone() }),
+                    action: Confirmed::Task(Plan { cmd: Cmd::Steps(vec![job]), cwd: self.browser.cwd.clone() }),
                 };
             }
             KeyCode::Char('r') => {
@@ -236,8 +237,8 @@ impl App {
         match then {
             AfterReview::InstallBinary(c, root, before) => self.install_binary(&c, &root, before.as_deref()),
             AfterReview::CargoInstall(root, before) => {
-                let cmd = then_run(before.as_deref(), install::cargo_install_cmd(&self.config.install_dir()));
-                self.start_task("cargo install".into(), Plan { cmd: Cmd::Sh(cmd), cwd: root });
+                let cmd = then_run(before.as_deref(), install::cargo_install(&self.config.install_dir()).into());
+                self.start_task("cargo install".into(), Plan { cmd, cwd: root });
             }
             AfterReview::Nothing => {}
         }
@@ -273,30 +274,18 @@ impl App {
         }
     }
 
-    pub(super) fn install_binary(&mut self, c: &Candidate, root: &Path, before: Option<&str>) {
-        let dest = &c.dest;
-        let dir = dest.parent().unwrap_or(Path::new("/"));
-        let dir_s = dir.to_string_lossy();
-        let cmd = format!(
-            "install -Dm755 -- {src} {dst} && echo 'installed → {pretty}' && \
-             case \":$PATH:\" in *:{d}:*) ;; *) echo 'note: {pretty_dir} is not on your PATH' ;; esac",
-            src = quote(&c.path),
-            dst = quote(dest),
-            pretty = config::pretty_path(dest),
-            d = quote_str(&dir_s),
-            pretty_dir = config::pretty_path(dir),
-        );
-        let cmd = Cmd::Sh(then_run(before, cmd));
+    pub(super) fn install_binary(&mut self, c: &Candidate, root: &Path, before: Option<&[Step]>) {
+        let install = Builtin::InstallFile { src: c.path.clone(), dest: c.dest.clone() };
+        let cmd = then_run(before, install.into());
         self.start_task(format!("install {}", c.name), Plan { cmd, cwd: root.to_path_buf() });
     }
 }
 
-/// `cmd`, after `before` when there is something to run first.
-fn then_run(before: Option<&str>, cmd: String) -> String {
-    match before {
-        Some(b) => format!("{b} && {cmd}"),
-        None => cmd,
-    }
+/// `job`, after the steps in `before` when there are some.
+fn then_run(before: Option<&[Step]>, job: Job) -> Cmd {
+    let mut jobs: Vec<Job> = before.unwrap_or_default().iter().cloned().map(Into::into).collect();
+    jobs.push(job);
+    Cmd::Steps(jobs)
 }
 
 fn picker_cwd(c: &Candidate) -> PathBuf {

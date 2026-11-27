@@ -162,7 +162,7 @@ impl App {
                 let root = g.root.clone();
                 if c == 'R' {
                     match release::overview(&root) {
-                        Ok(cmd) => self.start_task("releases".into(), Plan { cmd: Cmd::Sh(cmd), cwd: root }),
+                        Ok(cmd) => self.start_task("releases".into(), Plan { cmd, cwd: root }),
                         Err(e) => self.set_status(e, Level::Err),
                     }
                     return;
@@ -208,7 +208,7 @@ impl App {
                             self.mode = Mode::Form(form);
                             return;
                         }
-                        let cmd = Cmd::Sh(release::steps(&form, ctx).join(" && "));
+                        let cmd = Cmd::Steps(release::steps(&form, ctx));
                         let label = format!("release {}", form.get("version").trim());
                         let cwd = ctx.root.clone();
                         self.start_task(label, Plan { cmd, cwd });

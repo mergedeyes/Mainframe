@@ -10,8 +10,10 @@ use std::{
 
 use crate::{
     browser::human_size,
+    cmd::{Builtin, Cmd, Job},
     config, git, platform, proc,
-    project::{self, Kind, Project, quote, quote_str, which},
+    project::{self, Kind, Project, which},
+    run::Ctx,
     targets,
 };
 
@@ -25,8 +27,8 @@ pub struct Item {
     pub note: &'static str,
     /// What gets removed (and measured).
     pub paths: Vec<PathBuf>,
-    /// Runs instead of `rm -rf` on `paths` (`cargo clean`, `make clean`).
-    pub cmd: Option<String>,
+    /// Runs instead of deleting `paths` (`cargo clean`, `make clean`).
+    pub cmd: Option<Cmd>,
     /// Room the paths take; None for a command whose effect isn't known up front.
     pub size: Option<Usage>,
 }
@@ -36,14 +38,8 @@ impl Item {
         Item { place: None, root: root.to_path_buf(), label: label.into(), note, paths, cmd: None, size: None }
     }
 
-    fn tool(
-        root: &Path,
-        label: impl Into<String>,
-        note: &'static str,
-        paths: Vec<PathBuf>,
-        cmd: impl Into<String>,
-    ) -> Self {
-        Item { cmd: Some(cmd.into()), ..Item::dirs(root, label, note, paths) }
+    fn tool(root: &Path, label: impl Into<String>, note: &'static str, paths: Vec<PathBuf>, cmd: Cmd) -> Self {
+        Item { cmd: Some(cmd), ..Item::dirs(root, label, note, paths) }
     }
 
     /// The label, with the worktree in front for other worktrees.
@@ -54,12 +50,19 @@ impl Item {
         }
     }
 
-    /// The shell command, for running in `cwd`.
-    pub fn command(&self, cwd: &Path) -> String {
+    /// What clears it: the tool's command in its project, or deleting the paths.
+    pub fn jobs(&self) -> Vec<Job> {
         match &self.cmd {
-            Some(c) if self.root == cwd => c.clone(),
-            Some(c) => format!("(cd {} && {c})", quote(&self.root)),
-            None => format!("rm -rf -- {}", self.paths.iter().map(|p| show(p, cwd)).collect::<Vec<_>>().join(" ")),
+            Some(Cmd::Steps(jobs)) => jobs
+                .iter()
+                .map(|j| match j {
+                    Job::Run(s) if s.dir.is_none() => Job::Run(s.clone().in_dir(&self.root)),
+                    other => other.clone(),
+                })
+                .collect(),
+            // Commands from the user's config (a make target's recipe is make's own).
+            Some(other) => vec![Builtin::RunShell(other.display(&crate::shell::Shell::default())).into()],
+            None => vec![Builtin::Delete(self.paths.clone()).into()],
         }
     }
 
@@ -75,8 +78,8 @@ impl Item {
 
 fn show(p: &Path, root: &Path) -> String {
     match p.strip_prefix(root) {
-        Ok(rel) if !rel.as_os_str().is_empty() => quote(rel),
-        _ => quote(p),
+        Ok(rel) if !rel.as_os_str().is_empty() => rel.display().to_string(),
+        _ => config::pretty_path(p),
     }
 }
 
@@ -490,9 +493,7 @@ fn scan_one(project: &Project, shared: bool) -> Vec<Item> {
 
     // The project's own clean target last: it may do anything, so it isn't measured.
     for t in targets::list(project).into_iter().filter(|t| t.name == "clean") {
-        // The cleanup runs as one sh script.
-        let cmd = t.cmd.display(&crate::shell::Shell::sh());
-        items.push(Item::tool(root, format!("{} clean", t.group), "the project's own clean target", Vec::new(), cmd));
+        items.push(Item::tool(root, format!("{} clean", t.group), "the project's own clean target", Vec::new(), t.cmd));
     }
 
     for item in &mut items {
@@ -561,7 +562,7 @@ fn go_cache(root: &Path, items: &mut Vec<Item>) {
             "go build cache",
             "shared by all Go projects — rebuilt as needed",
             vec![dir],
-            "go clean -cache",
+            Cmd::words("go clean -cache"),
         ));
     }
 }
@@ -621,7 +622,7 @@ fn cargo(root: &Path, items: &mut Vec<Item>) {
         "all of target",
         "cargo clean — everything cargo built for this project",
         vec![target],
-        "cargo clean",
+        Cmd::words("cargo clean"),
     ));
 }
 
@@ -687,29 +688,46 @@ pub fn summary(items: &[&Item]) -> String {
 
 /// The shell script for a run: each step echoed, then what was freed on disk, measured
 /// with `df` around it. That's the real number, after compression and snapshots.
-pub fn script(steps: &[String], what: &str, expected: Option<Usage>) -> String {
-    let mut out = String::from("#!/bin/sh\n# Written by Mainframe's cleanup (C).\n");
-    out.push_str("avail() { df -B1 --output=avail . 2>/dev/null | tail -n1; }\nbefore=$(avail)\n");
-    for step in steps {
-        out.push_str(&format!("echo {}\n{step} || exit 1\n", quote_str(&format!("$ {step}"))));
+/// [`Builtin::Cleanup`]: runs `jobs`, then says how much room that freed on the disk.
+pub fn clean(ctx: &mut Ctx, jobs: &[Job], what: &str, expected: Option<u64>) -> Result<(), String> {
+    let before = platform::free_space(&ctx.cwd);
+    for job in jobs {
+        match job {
+            Job::Run(step) => {
+                let shown = step.display(&ctx.shell);
+                ctx.must(step, || format!("{shown} failed"))?
+            }
+            Job::Do(b) => crate::run::builtin(b, ctx)?,
+        }
     }
-    out.push_str("sync -f . 2>/dev/null\nafter=$(avail)\n");
-    out.push_str(&format!("what={}\n", quote_str(what)));
-    out.push_str(concat!(
-        "if [ -n \"$before\" ] && [ -n \"$after\" ]; then\n",
-        "  freed=$((after - before)); [ \"$freed\" -lt 0 ] && freed=0\n",
-        "  human=$(awk -v n=\"$freed\" 'BEGIN { split(\"B K M G T\", u); i = 1; while (n >= 1024 && i < 5) { n /= 1024; i++ }; printf(i == 1 ? \"%dB\" : \"%.1f%s\", n, u[i]) }')\n",
-        "  echo \"cleaned $what — $human freed on disk\"\n",
-    ));
-    if let Some(u) = expected.filter(|u| u.freed() > 0) {
-        out.push_str(&format!(
-            "  if [ \"$freed\" -lt {} ]; then echo 'less than expected: btrfs snapshots may still hold the deleted files'; fi\n",
-            u.freed() / 2
-        ));
+    platform::flush(&ctx.cwd);
+    match (before, platform::free_space(&ctx.cwd)) {
+        (Some(before), Some(after)) => {
+            let freed = after.saturating_sub(before);
+            ctx.success(format!("cleaned {what} — {} freed on disk", human_size(freed)));
+            if expected.is_some_and(|e| e > 0 && freed < e / 2) {
+                ctx.say("less than expected: btrfs snapshots may still hold the deleted files");
+            }
+        }
+        _ => ctx.success(format!("cleaned {what}")),
     }
-    // The last test above may be false; that's no failure.
-    out.push_str("else\n  echo \"cleaned $what\"\nfi\nexit 0\n");
-    out
+    Ok(())
+}
+
+/// [`Builtin::Delete`]: like `rm -rf`, shown as the paths it deletes.
+pub fn delete(ctx: &mut Ctx, paths: &[PathBuf]) -> Result<(), String> {
+    for p in paths {
+        let shown = show(p, &ctx.cwd);
+        ctx.say(format!("\x1b[2mdelete {shown}\x1b[0m"));
+        let gone = match fs::symlink_metadata(p) {
+            Ok(m) if m.is_dir() => fs::remove_dir_all(p),
+            Ok(_) => fs::remove_file(p),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        };
+        gone.map_err(|e| format!("can't delete {shown}: {e}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -769,17 +787,22 @@ mod tests {
             ]
         );
         assert!(items[0].size.unwrap().bytes >= 50_000);
-        assert_eq!(items[0].command(&root), "rm -rf -- node_modules");
-        assert_eq!(items[3].command(&root), "npm run clean");
-        assert_eq!(items[3].size, None);
-        // Git's sh on Windows takes either separator.
-        let unix = |s: String| {
-            s.replace(r"'old\target'", "old/target").replace(r"'tools\web\node_modules'", "tools/web/node_modules")
+        let deletes = |i: usize| match items[i].jobs().as_slice() {
+            [Job::Do(Builtin::Delete(paths))] => paths.clone(),
+            other => panic!("{other:?}"),
         };
-        assert_eq!(unix(items[4].command(&root)), "rm -rf -- old/target");
-        assert_eq!(unix(items[5].command(&root)), "rm -rf -- tools/web/node_modules");
-        assert_eq!(items[6].command(&root), format!("rm -rf -- {}", quote(&wt.join("node_modules"))));
-        assert_eq!(items[7].command(&root), format!("(cd {} && npm run clean)", quote(&wt)));
+        let runs = |i: usize| match items[i].jobs().as_slice() {
+            [Job::Run(step)] => (step.display(&crate::shell::Shell::sh()), step.dir.clone()),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(deletes(0), [root.join("node_modules")]);
+        assert_eq!(runs(3).0.split("   (in").next().unwrap(), "npm run clean");
+        assert_eq!(runs(3).1.as_deref(), Some(root.as_path()));
+        assert_eq!(items[3].size, None);
+        assert_eq!(deletes(4), [root.join("old").join("target")]);
+        assert_eq!(deletes(5), [root.join("tools").join("web").join("node_modules")]);
+        assert_eq!(deletes(6), [wt.join("node_modules")]);
+        assert_eq!(runs(7).1.as_deref(), Some(wt.as_path()));
     }
 }
 
@@ -803,20 +826,19 @@ mod usage_tests {
         assert_eq!(total(&[&release]), Usage { bytes: 50, disk: None });
     }
 
-    // Runs a sh script; Windows gets these once the script is Rust.
-    #[cfg(unix)]
     #[test]
-    fn script_succeeds_and_reports_what_was_freed() {
-        let dir = crate::testutil::temp_dir("script");
-        fs::create_dir_all(dir.join("junk")).unwrap();
-        fs::write(dir.join("junk/a"), vec![1u8; 100_000]).unwrap();
-        let s = script(&["rm -rf -- junk".into()], "junk", Some(Usage { bytes: 1, disk: None }));
-        let out = Command::new("sh").arg("-c").arg(&s).current_dir(&dir).output().unwrap();
+    fn cleanup_deletes_and_reports_what_was_freed() {
+        let dir = crate::testutil::temp_dir("cleanup-run");
+        fs::create_dir_all(dir.join("junk").join("deep")).unwrap();
+        fs::write(dir.join("junk").join("deep").join("a"), vec![1u8; 100_000]).unwrap();
+        let jobs = vec![Builtin::Delete(vec![dir.join("junk")]).into()];
+        let cmd = Cmd::from(Builtin::Cleanup { jobs, what: "junk".into(), expected: Some(1) });
+        let (ok, out) = crate::run::testing::run_in(&cmd, &dir);
         let gone = !dir.join("junk").exists();
         fs::remove_dir_all(&dir).unwrap();
-        assert!(out.status.success());
+        assert!(ok, "{out}");
         assert!(gone);
-        assert!(String::from_utf8_lossy(&out.stdout).contains("cleaned junk"));
+        assert!(out.contains("cleaned junk"), "{out}");
     }
 
     /// Only meaningful on a compressed btrfs (like the dev machine); skipped elsewhere.

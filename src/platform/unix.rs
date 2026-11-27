@@ -114,6 +114,18 @@ pub fn detach(command: &mut Command) {
     command.process_group(0);
 }
 
+pub(super) fn notify(summary: &str, body: &str) {
+    if which("notify-send").is_none() {
+        return;
+    }
+    let mut c = Command::new("notify-send");
+    c.args(["-a", "Mainframe", summary, body]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    detach(&mut c);
+    if let Ok(mut child) = c.spawn() {
+        drop(thread::spawn(move || child.wait()));
+    }
+}
+
 /// Opens a file in its default application.
 pub fn open(path: &Path) -> io::Result<()> {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
@@ -154,6 +166,26 @@ pub fn trash(path: &Path) -> io::Result<()> {
     }
     let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
     Err(io::Error::other(if msg.is_empty() { format!("{program} failed") } else { msg }))
+}
+
+pub(super) fn free_space(path: &Path) -> Option<u64> {
+    let c = CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: c is a valid C string and st a statvfs to fill.
+    unsafe {
+        let mut st: libc::statvfs = std::mem::zeroed();
+        (libc::statvfs(c.as_ptr(), &mut st) == 0).then(|| st.f_bavail as u64 * st.f_frsize as u64)
+    }
+}
+
+pub(super) fn flush(path: &Path) {
+    #[cfg(target_os = "linux")]
+    if let Ok(f) = std::fs::File::open(path) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: f is an open file descriptor.
+        unsafe { libc::syncfs(f.as_raw_fd()) };
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = path;
 }
 
 pub(super) fn disk_use(_path: &Path, meta: &Metadata) -> DiskUse {

@@ -89,7 +89,7 @@ Nothing is written into your projects unless you ask for it.
 | Per-project settings (deploy targets, actions) | `~/.config/mainframe/projects/` |
 | Your CLAUDE.md template | `~/.config/mainframe/CLAUDE.md` |
 | Notes and todos | `~/.local/share/mainframe/notes/` |
-| Saved output, command history, scripts that ran | `~/.local/state/mainframe/` |
+| Saved output, command history | `~/.local/state/mainframe/` |
 | Deploy build checkouts | `~/.cache/mainframe/deploy/` |
 
 The `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME`

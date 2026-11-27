@@ -9,10 +9,10 @@ use std::{
 use ratatui::style::Color;
 
 use crate::{
-    cmd::{Cmd, Step},
+    cmd::{Builtin, Cmd, Step},
     form::{Field, Form, FormKind},
     proc,
-    project::quote_str,
+    run::Ctx,
 };
 
 pub struct GitInfo {
@@ -431,20 +431,35 @@ pub fn behind_upstream(dir: &Path) -> Option<(String, String, usize)> {
 /// `base` wouldn't change a file: that's a branch rebased or squashed on the way in, whose
 /// commits `base` has under other ids. A merge with conflicts keeps the branch.
 pub fn fetch_cmd(prune_local: bool, base: Option<&str>) -> Cmd {
+    let fetch = Step::git().args(["fetch", "--all", "--prune"]);
     if !prune_local {
-        return Step::git().args(["fetch", "--all", "--prune"]).into();
+        return fetch.into();
     }
-    let fetch = format!("{GIT} fetch --all --prune");
-    Cmd::Sh(format!(
-        "{fetch} && base={} && \
-         in_base() {{ t=$(git merge-tree --write-tree --no-messages \"$base\" \"$1\" 2>/dev/null) && [ \"$t\" = \"$(git rev-parse \"$base^{{tree}}\")\" ]; }} && \
-         git for-each-ref --format='%(if:equals=gone)%(upstream:track,nobracket)%(then)%(refname:short)%(end)' refs/heads \
-         | while read -r b; do [ -n \"$b\" ] || continue; \
-         if git merge-base --is-ancestor \"$b\" \"$base\"; then git branch -D \"$b\"; \
-         elif in_base \"$b\"; then git branch -D \"$b\" && echo \"  (rebased or squashed: its changes are in $base)\"; \
-         else echo \"kept $b: its remote branch is gone, but it isn't merged into $base\"; fi; done",
-        quote_str(base.unwrap_or("HEAD"))
-    ))
+    fetch.then(Builtin::PruneGoneBranches { base: base.unwrap_or("HEAD").to_string() })
+}
+
+/// The second half of [`fetch_cmd`]: each local branch whose remote branch is gone is
+/// deleted when its work is in `base`, else kept with a note why.
+pub fn prune_gone_branches(ctx: &mut Ctx, base: &str) -> Result<(), String> {
+    let git = |args: &[&str]| Step::new("git").args(args.iter().copied());
+    let format = "--format=%(if:equals=gone)%(upstream:track,nobracket)%(then)%(refname:short)%(end)";
+    let gone = ctx.ask(&git(&["for-each-ref", format, "refs/heads"])).ok_or("git for-each-ref failed")?;
+    let base_tree = ctx.ask(&git(&["rev-parse", &format!("{base}^{{tree}}")]));
+    for b in gone.lines().map(str::trim).filter(|b| !b.is_empty()) {
+        let merged = ctx.ask(&git(&["merge-base", "--is-ancestor", b, base])).is_some();
+        // Merging it would change nothing: rebased or squashed in, under other commit ids.
+        let in_base = !merged
+            && base_tree.is_some()
+            && ctx.ask(&git(&["merge-tree", "--write-tree", "--no-messages", base, b])) == base_tree;
+        if merged || in_base {
+            if ctx.run(&Step::git().args(["branch", "-D", b])).ok() && in_base {
+                ctx.say(format!("  (rebased or squashed: its changes are in {base})"));
+            }
+        } else {
+            ctx.say(format!("kept {b}: its remote branch is gone, but it isn't merged into {base}"));
+        }
+    }
+    Ok(())
 }
 
 /// `git` with colors forced on, since the output pane isn't a tty.
@@ -576,7 +591,7 @@ pub fn gh_repo_create_cmd(form: &Form) -> Cmd {
         gh = gh.arg("--push");
     }
     steps.push(gh);
-    Cmd::Steps(steps)
+    Cmd::Steps(steps.into_iter().map(Into::into).collect())
 }
 
 #[cfg(test)]
@@ -635,7 +650,7 @@ mod push_tests {
         assert!(push_branch_cmd(&repo, "nope").is_err());
         let cmd = push_branch_cmd(&repo, "feature").unwrap();
         assert_eq!(cmd.display(&Shell::sh()), "git push -u origin feature");
-        let (ok, _) = cmd.run_in(&repo);
+        let (ok, _) = crate::run::testing::run_in(&cmd, &repo);
 
         let head = git(&repo, &["branch", "--show-current"]).unwrap();
         let on_remote = git(&remote, &["rev-parse", "feature"]).unwrap();
@@ -753,8 +768,6 @@ mod branch_tests {
 
     /// With pruning on, a merged branch whose remote branch is gone is deleted; one that
     /// isn't merged is kept, and so is everything with pruning off.
-    // Runs a sh script; Windows gets these once the script is Rust.
-    #[cfg(unix)]
     #[test]
     fn prunes_only_merged_branches_whose_remote_is_gone() {
         let (base, repo) = setup("prune");
@@ -784,7 +797,7 @@ mod branch_tests {
         run(&repo, &["push", "-q", "origin", "main", ":merged", ":rebased", ":squashed", ":unmerged", ":conflict"]);
         run(&repo, &["reset", "-q", "--hard", &start]);
         let run = |cmd: Cmd| {
-            let (ok, out) = cmd.run_in(&repo);
+            let (ok, out) = crate::run::testing::run_in(&cmd, &repo);
             assert!(ok, "{cmd:?}: {out}");
             out
         };
@@ -799,8 +812,10 @@ mod branch_tests {
         let mut left = after_prune.clone();
         left.sort();
         assert_eq!(left, ["conflict", "main", "unmerged"], "{out}");
-        assert!(out.contains("Deleted branch merged"), "{out}");
-        assert!(out.contains("Deleted branch rebased") && out.contains("Deleted branch squashed"), "{out}");
+        for b in ["merged", "rebased", "squashed"] {
+            assert!(out.contains(&format!("$ git branch -D {b}\n")), "{out}");
+        }
+        assert_eq!(out.matches("(rebased or squashed").count(), 2, "{out}");
         assert!(out.contains("kept unmerged") && out.contains("kept conflict"), "{out}");
     }
 

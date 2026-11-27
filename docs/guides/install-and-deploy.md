@@ -135,8 +135,8 @@ A deploy runs these steps in the output pane:
 Only the newest 3 backups are kept (`keep` in the settings). `u` puts the
 newest one back; press it again to go back one more.
 
-The script that ran is kept in `~/.local/state/mainframe/deploy/`, so you
-can read exactly what happened.
+The output pane shows each step under its own heading as it runs, with the
+commands that ran on this machine, so you can read exactly what happened.
 
 ### Running it as a systemd service
 
