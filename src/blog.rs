@@ -70,37 +70,38 @@ pub fn root(cwd: &Path, setting: &str) -> Option<PathBuf> {
 /// Drafts first, most recently changed first; then posts, newest first.
 pub fn list(root: &Path) -> Vec<Post> {
     let mut drafts: Vec<(SystemTime, Post)> = md_files(&root.join(DRAFTS))
-        .into_iter()
-        .map(|(path, stem)| {
-            let changed = fs::metadata(&path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-            let title = read_title(&path).unwrap_or_else(|| stem.clone());
-            (changed, Post { path, state: State::Draft, date: None, slug: stem, title })
+        .iter()
+        .filter_map(|path| {
+            let changed = fs::metadata(path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((changed, post(path)?))
         })
         .collect();
     drafts.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.slug.cmp(&b.1.slug)));
-
-    let mut posts: Vec<Post> = md_files(&root.join(POSTS))
-        .into_iter()
-        .filter_map(|(path, stem)| {
-            let (date, slug) = split_date(&stem)?;
-            let title = read_title(&path).unwrap_or_else(|| slug.to_string());
-            Some(Post { state: State::Post, date: Some(date.to_string()), slug: slug.to_string(), title, path })
-        })
-        .collect();
+    let mut posts: Vec<Post> = md_files(&root.join(POSTS)).iter().filter_map(|p| post(p)).collect();
     posts.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| b.slug.cmp(&a.slug)));
-
     drafts.into_iter().map(|(_, p)| p).chain(posts).collect()
 }
 
-/// `(path, stem)` of every `*.md` file directly in `dir`.
-fn md_files(dir: &Path) -> Vec<(PathBuf, String)> {
+/// The post or draft at `path`, as `list` would show it.
+pub fn post(path: &Path) -> Option<Post> {
+    let stem = path.file_stem()?.to_str()?.to_string();
+    let dir = path.parent()?.file_name()?;
+    let title = |fallback: &str| read_title(path).unwrap_or_else(|| fallback.to_string());
+    if dir == DRAFTS {
+        Some(Post { path: path.to_path_buf(), state: State::Draft, date: None, title: title(&stem), slug: stem })
+    } else if dir == POSTS {
+        let (date, slug) = split_date(&stem)?;
+        let (date, slug) = (date.to_string(), slug.to_string());
+        Some(Post { path: path.to_path_buf(), state: State::Post, date: Some(date), title: title(&slug), slug })
+    } else {
+        None
+    }
+}
+
+/// Every `*.md` file directly in `dir`.
+fn md_files(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
-    entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "md"))
-        .filter_map(|p| Some((p.clone(), p.file_stem()?.to_str()?.to_string())))
-        .collect()
+    entries.flatten().map(|e| e.path()).filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "md")).collect()
 }
 
 /// `2026-11-27-hello` → `("2026-11-27", "hello")`; None without a valid date in front.
@@ -169,6 +170,89 @@ fn unquote(v: &str) -> String {
         out
     } else {
         v.split(" #").next().unwrap_or(v).trim().to_string()
+    }
+}
+
+/// A post split for the editor: title, description and body to edit, the other front
+/// matter kept as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Doc {
+    front: Vec<Front>,
+    pub title: String,
+    pub description: String,
+    pub body: String,
+}
+
+/// A front matter line. Title and description remember how they were written, so they're
+/// written back unchanged unless they were edited.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Front {
+    Title { raw: String, value: String },
+    Description { raw: String, value: String },
+    Other(String),
+}
+
+impl Doc {
+    pub fn parse(text: &str) -> Self {
+        let mut doc = Doc { front: Vec::new(), title: String::new(), description: String::new(), body: String::new() };
+        let lines: Vec<&str> = text.split('\n').collect();
+        let close = (lines.first().map(|l| l.trim_end()) == Some("---"))
+            .then(|| lines.iter().skip(1).position(|l| l.trim_end() == "---"))
+            .flatten();
+        let Some(close) = close.map(|c| c + 1) else {
+            doc.front.push(Front::Other("layout: post".into()));
+            doc.body = text.to_string();
+            return doc;
+        };
+        for line in &lines[1..close] {
+            let raw = line.to_string();
+            if let Some(v) = line.strip_prefix("title:") {
+                doc.title = unquote(v.trim());
+                doc.front.push(Front::Title { raw, value: doc.title.clone() });
+            } else if let Some(v) = line.strip_prefix("description:") {
+                doc.description = unquote(v.trim());
+                doc.front.push(Front::Description { raw, value: doc.description.clone() });
+            } else {
+                doc.front.push(Front::Other(raw));
+            }
+        }
+        let body = lines[close + 1..].join("\n");
+        // The empty line after the front matter is part of the layout, not of the text.
+        doc.body = body.strip_prefix('\n').map(str::to_string).unwrap_or(body);
+        doc
+    }
+
+    pub fn render(&self) -> String {
+        let edited = |raw: &str, was: &str, key: &str, now: &str| {
+            if was == now { raw.to_string() } else { format!("{key}: {}", yaml_str(now)) }
+        };
+        let mut lines = Vec::new();
+        let (mut title_at, mut had_desc) = (None, false);
+        for f in &self.front {
+            match f {
+                Front::Title { raw, value } => {
+                    title_at = Some(lines.len());
+                    lines.push(edited(raw, value, "title", &self.title));
+                }
+                Front::Description { raw, value } => {
+                    had_desc = true;
+                    if !self.description.is_empty() {
+                        lines.push(edited(raw, value, "description", &self.description));
+                    }
+                }
+                Front::Other(l) => lines.push(l.clone()),
+            }
+        }
+        // A missing title goes below the layout, a new description below the title.
+        let title_at = title_at.unwrap_or_else(|| {
+            let at = lines.iter().position(|l| l.starts_with("layout:")).map_or(0, |i| i + 1);
+            lines.insert(at, format!("title: {}", yaml_str(&self.title)));
+            at
+        });
+        if !had_desc && !self.description.is_empty() {
+            lines.insert(title_at + 1, format!("description: {}", yaml_str(&self.description)));
+        }
+        format!("---\n{}\n---\n\n{}", lines.join("\n"), self.body)
     }
 }
 
@@ -606,6 +690,36 @@ mod tests {
         assert!(run(never, "").1.starts_with("no finished Pages build"));
         assert_eq!(run(never, "false && "), (false, String::new()));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn docs_keep_what_was_not_edited() {
+        let text = "---\nlayout: post\ntitle: Plain Title\ntags: [a, b]\n---\n\nHallo\n\nWelt\n";
+        let mut doc = Doc::parse(text);
+        assert_eq!((doc.title.as_str(), doc.description.as_str()), ("Plain Title", ""));
+        assert_eq!(doc.body, "Hallo\n\nWelt\n");
+        assert_eq!(doc.render(), text);
+
+        doc.description = "Neu \"hier\"".into();
+        doc.body.push_str("mehr\n");
+        assert_eq!(
+            doc.render(),
+            "---\nlayout: post\ntitle: Plain Title\ndescription: \"Neu \\\"hier\\\"\"\ntags: [a, b]\n---\n\nHallo\n\nWelt\nmehr\n"
+        );
+        doc.title = "Other".into();
+        doc.description.clear();
+        let again = Doc::parse(&doc.render());
+        assert_eq!(again.render(), "---\nlayout: post\ntitle: \"Other\"\ntags: [a, b]\n---\n\nHallo\n\nWelt\nmehr\n");
+
+        // What `create` writes reads back with an empty body.
+        let fresh = Doc::parse(&front_matter("T", "D"));
+        assert_eq!((fresh.title.as_str(), fresh.description.as_str(), fresh.body.as_str()), ("T", "D", ""));
+        assert_eq!(fresh.render(), front_matter("T", "D"));
+
+        // No front matter: the text is the body, and saving adds front matter.
+        let mut bare = Doc::parse("just text");
+        bare.title = "Titel".into();
+        assert_eq!(bare.render(), "---\nlayout: post\ntitle: \"Titel\"\n---\n\njust text");
     }
 
     #[test]

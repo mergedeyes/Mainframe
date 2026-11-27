@@ -190,11 +190,36 @@ nothing. See [Blog](../guides/blog.md).
 |---|---|
 | `j` `k`, ↓ ↑ | move |
 | `g` `G`, `Home` `End` | first, last post |
-| `Enter`, `e` | edit in your editor; the picker comes back afterwards |
-| `a` | new post: title, description, draft or post now |
+| `Enter`, `e` | write in the built-in [post editor](#post-editor) |
+| `E` | edit in your own editor instead; the picker comes back afterwards |
+| `a` | new post: title, description, draft or post now; then the post editor |
 | `p` | publish a draft: move it to `_posts/` with today's date, commit and push (asks first) |
 | `P` | commit and push your changes to a post |
 | `u` | unpublish: move a post back to `_drafts/`, no commit |
 | `d`, Delete | move to the trash (asks first) |
 | `/` | filter; `Enter` keeps it, `Esc` clears it |
 | `Esc`, `q` or `L` | close (`Esc` clears a filter first) |
+
+### Post editor
+
+Title and description on top, the Markdown on the left, a preview on the
+right (in windows at least 90 columns wide). It saves by itself a moment
+after you stop typing, and when you close it.
+
+| Key | What it does |
+|---|---|
+| `Enter`, `Tab`, ↓ / Shift-Tab, ↑ | next / previous field; ↑ on the first line of the text goes back to the description |
+| arrows, `Home` `End`, `PgUp` `PgDn` | move; up and down go by screen row in wrapped lines |
+| `Ctrl` ← → | a word left, right |
+| `Ctrl-Home` `Ctrl-End` | start, end of the text |
+| `Ctrl-W`, `Ctrl-Backspace` | delete the word before the cursor |
+| `Enter` | new line; in a list or quote it continues it, on an empty item it ends the list |
+| `Tab` / Shift-Tab | indent / outdent a list item (elsewhere: four spaces) |
+| `Ctrl-B` / `Ctrl-E` | the word in `**bold**` / `_italic_`, or an empty pair to type into |
+| `Ctrl-K` | the word as a link, `[word]()`, cursor in the parentheses |
+| `Ctrl-Z` / `Ctrl-Y` | undo / redo |
+| `Ctrl-S` | save now (also over changes made outside Mainframe) |
+| `Ctrl-R` | reload the file from disk |
+| `Ctrl-P` | preview on or off |
+| `Ctrl-G` | a draft: publish it (asks first); a post: commit and push your changes |
+| `Esc`, `Ctrl-Q` | save and close, back to the picker |

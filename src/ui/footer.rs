@@ -59,6 +59,10 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // The post editor shows its own keys; the file list's would only confuse.
+    if matches!(app.mode, Mode::Post(_)) {
+        return;
+    }
     let key = |k: &'static str| Span::styled(k, Style::new().fg(ACCENT).bold());
     let txt = |t: &'static str| Span::styled(t, Style::new().fg(DIM));
     let mut spans = vec![Span::raw(" ")];

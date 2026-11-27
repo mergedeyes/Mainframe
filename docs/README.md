@@ -18,7 +18,7 @@ does today, on Linux.
 - [Projects, notes and Claude](guides/projects.md): the project picker, notes and todos, new projects, the CLAUDE.md preset
 - [Installing and deploying](guides/install-and-deploy.md): putting a binary on your PATH, deploying to a Raspberry Pi or a server
 - [Cleaning up](guides/cleanup.md): getting disk space back from build output, dependencies and caches
-- [Blog](guides/blog.md): drafts and posts of a Jekyll blog, publishing and pushing them
+- [Blog](guides/blog.md): drafts and posts of a Jekyll blog, writing them with a live preview, publishing and pushing them
 
 ## Reference
 

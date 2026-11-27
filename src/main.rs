@@ -15,6 +15,7 @@ mod history;
 mod install;
 mod line;
 mod locate;
+mod markdown;
 mod notes;
 mod proc;
 mod project;
@@ -26,6 +27,7 @@ mod targets;
 mod task;
 #[cfg(test)]
 mod testutil;
+mod textarea;
 mod ui;
 mod watch;
 
@@ -43,7 +45,7 @@ use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
         cursor,
-        event::{self, Event, KeyEventKind},
+        event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
         execute,
         terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode},
     },
@@ -66,7 +68,10 @@ fn main() -> Result<()> {
     let mut app = App::new(start, config, config_err);
 
     let mut terminal = ratatui::init();
+    // Pastes arrive whole, so the post editor doesn't continue lists on every pasted line.
+    let _ = execute!(io::stdout(), EnableBracketedPaste);
     let result = run(&mut terminal, &mut app);
+    let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
 
     // cd-on-exit: shell wrappers can read this (see README).
@@ -86,6 +91,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         if event::poll(Duration::from_millis(timeout))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
+                Event::Paste(text) => app.on_paste(&text),
                 _ => {}
             }
         }
@@ -102,6 +108,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 /// Hands the real terminal to a command (nano, an interactive program, a shell).
 /// Returns its stdout when `cd_to_output` asked for it to be captured.
 fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground) -> Result<Option<String>> {
+    execute!(io::stdout(), DisableBracketedPaste)?;
     ratatui::restore();
     execute!(io::stdout(), cursor::Show)?;
     if fg.wait {
@@ -133,7 +140,7 @@ fn run_foreground(terminal: &mut DefaultTerminal, fg: &Foreground) -> Result<Opt
     }
 
     enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All))?;
+    execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All), EnableBracketedPaste)?;
     // A fresh Terminal forces a full redraw; `terminal.clear()` would query the
     // cursor position, which some terminals answer slowly or not at all.
     *terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;

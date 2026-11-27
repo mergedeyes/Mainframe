@@ -1,7 +1,8 @@
 # Blog
 
 Mainframe can look after one [Jekyll](https://jekyllrb.com) blog: write
-posts, publish them and push them without leaving the window. It only does
+posts in its own Markdown editor, publish them and push them without leaving
+the window. It only does
 this in the blog's own repo, so nothing changes anywhere else.
 
 ## Setting it up
@@ -26,8 +27,9 @@ file name when there is none).
 Letters are commands here, so `/` starts the filter: type, then `Enter`
 keeps it, `Esc` clears it.
 
-`Enter` or `e` opens the selected file in your editor. When you close the
-editor, the picker comes back with the same file selected.
+`Enter` or `e` opens the selected post in the post editor (below). `E`
+opens it in your own editor (`editor` in the config) instead; when you
+close that, the picker comes back with the same file selected.
 
 ## Writing a post
 
@@ -40,7 +42,7 @@ editor, the picker comes back with the same file selected.
   `_posts/<today>-<name>.md`
 
 Mainframe never replaces a file that's already there. The new file starts
-with its front matter and opens in your editor:
+with its front matter and opens in the post editor, ready for the text:
 
 ```yaml
 ---
@@ -49,6 +51,55 @@ title: "Größe zählt"
 description: "Warum Maße wichtig sind"
 ---
 ```
+
+## The post editor
+
+```
+╭ draft _drafts/groesse-zaehlt.md ──────────────────────────────────────────╮
+│ title       Größe zählt                                                    │
+│ description Warum Maße wichtig sind                                        │
+│────────────────────────────────────────────────────────────────────────────│
+│ # Einleitung                          │ Größe zählt                        │
+│                                       │ Warum Maße wichtig sind            │
+│ Heute geht es um **Maße**.            │                                    │
+│                                       │ Einleitung                         │
+│ - eins                                │                                    │
+│ - zwei                                │ Heute geht es um Maße.             │
+│                                       │                                    │
+│                                       │ • eins                             │
+│                                       │ • zwei                             │
+│ 7 words · saved                                                            │
+╰ ^S save · ^G publish · ^P preview · ^Z ^Y undo · ^B bold · … · Esc close ──╯
+```
+
+Title and description are fields at the top; Mainframe writes them into the
+front matter and leaves every other front matter line (`tags:`, `image:` …)
+as it is. Below them is the Markdown, highlighted as you type, with long
+lines wrapped. On the right, in windows at least 90 columns wide, a preview
+shows the post roughly as it will read, and follows the part you're
+writing. `Ctrl-P` turns it off.
+
+Some help with Markdown:
+
+- `Enter` in a list continues it (`- `, `1. ` counting up, `- [ ] `), and on
+  an empty item ends it; quotes (`> `) continue the same way
+- `Tab` and Shift-Tab indent and outdent list items
+- `Ctrl-B` makes the word at the cursor `**bold**`, `Ctrl-E` `_italic_`,
+  `Ctrl-K` a link with the cursor where the address goes
+- pasting puts the text in as it is, without continuing lists
+
+There's nothing to save by hand: a moment after you stop typing, and when
+you close the editor with `Esc`, the post is written. `Ctrl-S` saves right
+away. If another program changes the file while it's open, Mainframe stops
+saving and says so: `Ctrl-R` loads the file as it is now, `Ctrl-S` keeps
+your version.
+
+`Ctrl-Z` and `Ctrl-Y` undo and redo, a word at a time. All keys are in the
+[key reference](../reference/keys.md#post-editor).
+
+`Ctrl-G` takes the post live from the editor: on a draft it publishes it
+like `p` (asking first), on a post it commits and pushes your changes like
+`P`.
 
 ## Publishing
 

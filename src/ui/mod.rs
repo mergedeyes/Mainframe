@@ -12,6 +12,7 @@ mod installer;
 mod notes_view;
 mod output;
 mod pickers;
+mod post_editor;
 
 use ratatui::{
     Frame,
@@ -39,6 +40,7 @@ use self::{
     notes_view::draw_notes,
     output::draw_output,
     pickers::{draw_blog_picker, draw_branch_picker, draw_file_finder, draw_project_picker, draw_task_picker},
+    post_editor::draw_post_editor,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -94,6 +96,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Deploy(picker) => draw_deploy(f, picker, f.area()),
         Mode::Cleanup(picker) => draw_cleanup(f, picker, f.area()),
         Mode::Blog(picker) => draw_blog_picker(f, picker, f.area()),
+        Mode::Post(ed) => draw_post_editor(f, ed, f.area()),
         _ => {}
     }
 }
